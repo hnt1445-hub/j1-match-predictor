@@ -43,6 +43,13 @@ for _, match in df_2025.iterrows():
         points[away] = away_points + 1
 
 m1 = pd.DataFrame(m1_rows)
+m1["Result"] = [
+    "H" if hg > ag else "A" if hg < ag else "D"
+    for hg, ag in zip(df_2025["HG"], df_2025["AG"])
+]
+
+st.write("実際の結果:")
+st.write(m1["Result"].value_counts())
 st.write("M1の試合数:", len(m1))
 st.dataframe(m1.head(10))
 
