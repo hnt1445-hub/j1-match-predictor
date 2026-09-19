@@ -59,6 +59,13 @@ m1["Prediction"] = m1["PointsDiff"].apply(
 m1_accuracy = (m1["Prediction"] == m1["Result"]).mean()
 
 st.write("M1 正解率:", f"{m1_accuracy:.1%}")
+st.write("M1 予測結果:")
+st.write(pd.crosstab(
+    m1["Result"],
+    m1["Prediction"],
+    rownames=["実際"],
+    colnames=["予測"]
+))
 
 st.title("⚽ J1 Match Predictor")
 st.write("J1リーグの試合結果を予測するアプリです。")
