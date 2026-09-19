@@ -961,6 +961,335 @@ away_team = st.selectbox(
     index=1
 )
 
+# =========================
+# 🔍 M1〜M5 検証
+# =========================
+
+st.header("🔍 M1〜M5 検証")
+
+
+# -------------------------
+# 正解数を確認
+# -------------------------
+
+verification_rows = []
+
+for model in [
+    "M1",
+    "M2",
+    "M3",
+    "M4",
+    "M5"
+]:
+
+    prediction_col = (
+        f"{model}_Prediction"
+    )
+
+    predictions = (
+        model_data[prediction_col]
+    )
+
+    correct_count = (
+        predictions ==
+        model_data["Result"]
+    ).sum()
+
+    home_count = (
+        predictions == "H"
+    ).sum()
+
+    draw_count = (
+        predictions == "D"
+    ).sum()
+
+    away_count = (
+        predictions == "A"
+    ).sum()
+
+    verification_rows.append({
+        "モデル": model,
+        "正解数": int(correct_count),
+        "全試合": len(model_data),
+        "正解率": (
+            correct_count /
+            len(model_data) *
+            100
+        ),
+        "H予測": int(home_count),
+        "D予測": int(draw_count),
+        "A予測": int(away_count)
+    })
+
+
+verification = pd.DataFrame(
+    verification_rows
+)
+
+verification["正解率"] = (
+    verification["正解率"]
+    .round(2)
+)
+
+
+st.subheader(
+    "① 正解数と予測内訳"
+)
+
+st.dataframe(
+    verification,
+    hide_index=True
+)
+
+
+# =========================
+# 前モデルから何試合変わったか
+# =========================
+
+change_rows = []
+
+model_pairs = [
+    ("M1", "M2"),
+    ("M2", "M3"),
+    ("M3", "M4"),
+    ("M4", "M5")
+]
+
+
+for old_model, new_model in model_pairs:
+
+    old_col = (
+        f"{old_model}_Prediction"
+    )
+
+    new_col = (
+        f"{new_model}_Prediction"
+    )
+
+    changed = (
+        model_data[old_col] !=
+        model_data[new_col]
+    )
+
+    changed_count = changed.sum()
+
+    # 変更によって正解になった試合
+    became_correct = (
+        changed &
+        (
+            model_data[new_col] ==
+            model_data["Result"]
+        ) &
+        (
+            model_data[old_col] !=
+            model_data["Result"]
+        )
+    ).sum()
+
+    # 変更によって不正解になった試合
+    became_wrong = (
+        changed &
+        (
+            model_data[new_col] !=
+            model_data["Result"]
+        ) &
+        (
+            model_data[old_col] ==
+            model_data["Result"]
+        )
+    ).sum()
+
+    change_rows.append({
+        "比較":
+            f"{old_model} → {new_model}",
+
+        "予測が変わった試合":
+            int(changed_count),
+
+        "変更で正解になった":
+            int(became_correct),
+
+        "変更で不正解になった":
+            int(became_wrong),
+
+        "正解数の差":
+            int(
+                became_correct -
+                became_wrong
+            )
+    })
+
+
+changes = pd.DataFrame(
+    change_rows
+)
+
+
+st.subheader(
+    "② 前モデルから予測が変わった試合"
+)
+
+st.dataframe(
+    changes,
+    hide_index=True
+)
+
+
+# =========================
+# 実際の結果の内訳
+# =========================
+
+actual_counts = (
+    model_data["Result"]
+    .value_counts()
+)
+
+actual_table = pd.DataFrame({
+    "結果": [
+        "H（ホーム勝ち）",
+        "D（引き分け）",
+        "A（アウェイ勝ち）"
+    ],
+
+    "試合数": [
+        int(actual_counts.get("H", 0)),
+        int(actual_counts.get("D", 0)),
+        int(actual_counts.get("A", 0))
+    ]
+})
+
+
+st.subheader(
+    "③ 実際の2025年J1結果"
+)
+
+st.dataframe(
+    actual_table,
+    hide_index=True
+)
+
+
+# =========================
+# 引き分けをどれだけ当てたか
+# =========================
+
+draw_rows = []
+
+actual_draws = (
+    model_data["Result"] == "D"
+).sum()
+
+
+for model in [
+    "M1",
+    "M2",
+    "M3",
+    "M4",
+    "M5"
+]:
+
+    prediction_col = (
+        f"{model}_Prediction"
+    )
+
+    correct_draws = (
+        (
+            model_data["Result"] == "D"
+        ) &
+        (
+            model_data[prediction_col] == "D"
+        )
+    ).sum()
+
+    if actual_draws > 0:
+
+        draw_recall = (
+            correct_draws /
+            actual_draws *
+            100
+        )
+
+    else:
+
+        draw_recall = 0
+
+    draw_rows.append({
+        "モデル": model,
+
+        "実際の引き分け":
+            int(actual_draws),
+
+        "引き分け予測数":
+            int(
+                (
+                    model_data[
+                        prediction_col
+                    ] == "D"
+                ).sum()
+            ),
+
+        "的中した引き分け":
+            int(correct_draws),
+
+        "引き分けRecall":
+            round(draw_recall, 1)
+    })
+
+
+draw_verification = pd.DataFrame(
+    draw_rows
+)
+
+
+st.subheader(
+    "④ 引き分け予測の確認"
+)
+
+st.dataframe(
+    draw_verification,
+    hide_index=True
+)
+
+
+# =========================
+# M2〜M5が完全一致しているか
+# =========================
+
+st.subheader(
+    "⑤ M2〜M5の予測一致チェック"
+)
+
+
+m2_m3_same = (
+    model_data["M2_Prediction"] ==
+    model_data["M3_Prediction"]
+).sum()
+
+m3_m4_same = (
+    model_data["M3_Prediction"] ==
+    model_data["M4_Prediction"]
+).sum()
+
+m4_m5_same = (
+    model_data["M4_Prediction"] ==
+    model_data["M5_Prediction"]
+).sum()
+
+
+st.write(
+    "M2とM3が同じ予測:",
+    f"{m2_m3_same} / {len(model_data)}"
+)
+
+st.write(
+    "M3とM4が同じ予測:",
+    f"{m3_m4_same} / {len(model_data)}"
+)
+
+st.write(
+    "M4とM5が同じ予測:",
+    f"{m4_m5_same} / {len(model_data)}"
+)
 
 if st.button("試合を予測する"):
 
