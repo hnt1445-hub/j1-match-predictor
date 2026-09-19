@@ -82,6 +82,22 @@ for _, match in df_2025.iterrows():
         points[home] = home_points + 1
         points[away] = away_points + 1
 
+    # この試合で獲得した勝点を直近成績に記録
+    if match["HG"] > match["AG"]:
+        home_match_points = 3
+        away_match_points = 0
+
+    elif match["HG"] < match["AG"]:
+         home_match_points = 0
+         away_match_points = 3
+
+    else:
+         home_match_points = 1
+         away_match_points = 1
+
+    recent_points.setdefault(home, []).append(home_match_points)
+    recent_points.setdefault(away, []).append(away_match_points)
+
 
 m1 = pd.DataFrame(m1_rows)
 
