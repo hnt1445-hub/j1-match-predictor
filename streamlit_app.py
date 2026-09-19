@@ -22,26 +22,28 @@ st.write("J1リーグの試合結果を予測するアプリです。")
 
 df = pd.read_csv("data/JPN.csv")
 
-# 2025年J1だけを取り出す
 df_2025 = df[
     (df["Season"] == "2025") &
     (df["League"] == "J1 League")
 ].copy()
 
-# 日付順に並べる
 df_2025["Date"] = pd.to_datetime(
     df_2025["Date"],
     dayfirst=True
 )
 
-df_2025 = df_2025.sort_values("Date").reset_index(drop=True)
+df_2025 = (
+    df_2025
+    .sort_values("Date")
+    .reset_index(drop=True)
+)
 
 
 # =========================
-# M1〜M4の確率計算関数
+# 確率計算関数
 # =========================
 
-# M1：勝点差のみ
+# M1：勝点差
 def m1_probabilities(points_diff):
 
     home_score = np.exp(points_diff / 10)
@@ -51,9 +53,9 @@ def m1_probabilities(points_diff):
     total = home_score + draw_score + away_score
 
     return pd.Series({
-        "Prob_H": home_score / total,
-        "Prob_D": draw_score / total,
-        "Prob_A": away_score / total
+        "M1_Prob_H": home_score / total,
+        "M1_Prob_D": draw_score / total,
+        "M1_Prob_A": away_score / total
     })
 
 
@@ -62,7 +64,10 @@ def m2_probabilities(points_diff):
 
     home_advantage = 2.0
 
-    strength = points_diff + home_advantage
+    strength = (
+        points_diff +
+        home_advantage
+    )
 
     home_score = np.exp(strength / 10)
     away_score = np.exp(-strength / 10)
@@ -77,16 +82,19 @@ def m2_probabilities(points_diff):
     })
 
 
-# M3：勝点差＋ホーム補正＋直近5試合
-def m3_probabilities(points_diff, form_diff):
+# M3：M2＋直近5試合
+def m3_probabilities(
+    points_diff,
+    form_diff
+):
 
     home_advantage = 2.0
     form_weight = 0.5
 
     strength = (
-        points_diff
-        + home_advantage
-        + form_diff * form_weight
+        points_diff +
+        home_advantage +
+        form_diff * form_weight
     )
 
     home_score = np.exp(strength / 10)
@@ -102,7 +110,7 @@ def m3_probabilities(points_diff, form_diff):
     })
 
 
-# M4：勝点差＋ホーム補正＋直近5試合＋得失点差
+# M4：M3＋得失点差
 def m4_probabilities(
     points_diff,
     form_diff,
@@ -114,10 +122,10 @@ def m4_probabilities(
     goal_diff_weight = 0.2
 
     strength = (
-        points_diff
-        + home_advantage
-        + form_diff * form_weight
-        + goal_diff_diff * goal_diff_weight
+        points_diff +
+        home_advantage +
+        form_diff * form_weight +
+        goal_diff_diff * goal_diff_weight
     )
 
     home_score = np.exp(strength / 10)
@@ -133,8 +141,44 @@ def m4_probabilities(
     })
 
 
+# M5：M4＋Elo
+def m5_probabilities(
+    points_diff,
+    form_diff,
+    goal_diff_diff,
+    elo_diff
+):
+
+    home_advantage = 2.0
+    form_weight = 0.5
+    goal_diff_weight = 0.2
+
+    # Elo差100を勝点差約2相当として扱う仮設定
+    elo_weight = 0.02
+
+    strength = (
+        points_diff +
+        home_advantage +
+        form_diff * form_weight +
+        goal_diff_diff * goal_diff_weight +
+        elo_diff * elo_weight
+    )
+
+    home_score = np.exp(strength / 10)
+    away_score = np.exp(-strength / 10)
+    draw_score = 1.0
+
+    total = home_score + draw_score + away_score
+
+    return pd.Series({
+        "M5_Prob_H": home_score / total,
+        "M5_Prob_D": draw_score / total,
+        "M5_Prob_A": away_score / total
+    })
+
+
 # =========================
-# 試合前データを作る
+# 試合前データ作成
 # =========================
 
 points = {}
@@ -142,6 +186,12 @@ recent_points = {}
 
 goals_for = {}
 goals_against = {}
+
+# 全チームのEloは1500から開始
+elo = {}
+
+# Eloの変動幅
+K_FACTOR = 20
 
 model_rows = []
 
@@ -152,7 +202,7 @@ for _, match in df_2025.iterrows():
     away = match["Away"]
 
     # -------------------------
-    # 試合前の累積勝点
+    # 試合前の勝点
     # -------------------------
 
     home_points = points.get(home, 0)
@@ -163,22 +213,42 @@ for _, match in df_2025.iterrows():
     # 試合前の直近5試合
     # -------------------------
 
-    home_recent = recent_points.get(home, [])
-    away_recent = recent_points.get(away, [])
+    home_recent = recent_points.get(
+        home, []
+    )
 
-    home_form = sum(home_recent[-5:])
-    away_form = sum(away_recent[-5:])
+    away_recent = recent_points.get(
+        away, []
+    )
+
+    home_form = sum(
+        home_recent[-5:]
+    )
+
+    away_form = sum(
+        away_recent[-5:]
+    )
 
 
     # -------------------------
     # 試合前の得失点差
     # -------------------------
 
-    home_goals_for = goals_for.get(home, 0)
-    home_goals_against = goals_against.get(home, 0)
+    home_goals_for = goals_for.get(
+        home, 0
+    )
 
-    away_goals_for = goals_for.get(away, 0)
-    away_goals_against = goals_against.get(away, 0)
+    home_goals_against = goals_against.get(
+        home, 0
+    )
+
+    away_goals_for = goals_for.get(
+        away, 0
+    )
+
+    away_goals_against = goals_against.get(
+        away, 0
+    )
 
     home_goal_diff = (
         home_goals_for -
@@ -192,6 +262,19 @@ for _, match in df_2025.iterrows():
 
 
     # -------------------------
+    # 試合前のElo
+    # -------------------------
+
+    home_elo = elo.get(
+        home, 1500.0
+    )
+
+    away_elo = elo.get(
+        away, 1500.0
+    )
+
+
+    # -------------------------
     # 試合前情報を保存
     # -------------------------
 
@@ -199,46 +282,67 @@ for _, match in df_2025.iterrows():
         "Home": home,
         "Away": away,
 
-        "HomePointsBefore": home_points,
-        "AwayPointsBefore": away_points,
+        "HomePointsBefore":
+            home_points,
+
+        "AwayPointsBefore":
+            away_points,
 
         "PointsDiff":
             home_points - away_points,
 
-        "HomeForm5": home_form,
-        "AwayForm5": away_form,
+        "HomeForm5":
+            home_form,
+
+        "AwayForm5":
+            away_form,
 
         "HomeGoalDiffBefore":
             home_goal_diff,
 
         "AwayGoalDiffBefore":
-            away_goal_diff
+            away_goal_diff,
+
+        "HomeEloBefore":
+            home_elo,
+
+        "AwayEloBefore":
+            away_elo
     })
 
 
-    # -------------------------
-    # この試合の勝点
-    # -------------------------
+    # =========================
+    # 実際の試合結果
+    # =========================
 
     if match["HG"] > match["AG"]:
 
         home_match_points = 3
         away_match_points = 0
 
+        home_actual = 1.0
+        away_actual = 0.0
+
     elif match["HG"] < match["AG"]:
 
         home_match_points = 0
         away_match_points = 3
+
+        home_actual = 0.0
+        away_actual = 1.0
 
     else:
 
         home_match_points = 1
         away_match_points = 1
 
+        home_actual = 0.5
+        away_actual = 0.5
 
-    # -------------------------
-    # 試合終了後に累積勝点を更新
-    # -------------------------
+
+    # =========================
+    # 試合終了後に勝点更新
+    # =========================
 
     points[home] = (
         home_points +
@@ -251,9 +355,9 @@ for _, match in df_2025.iterrows():
     )
 
 
-    # -------------------------
-    # 直近成績を更新
-    # -------------------------
+    # =========================
+    # 直近成績更新
+    # =========================
 
     recent_points.setdefault(
         home, []
@@ -268,10 +372,9 @@ for _, match in df_2025.iterrows():
     )
 
 
-    # -------------------------
-    # 得点・失点を更新
-    # ※試合前情報を保存した後に更新する
-    # -------------------------
+    # =========================
+    # 得点・失点更新
+    # =========================
 
     goals_for[home] = (
         home_goals_for +
@@ -291,6 +394,46 @@ for _, match in df_2025.iterrows():
     goals_against[away] = (
         away_goals_against +
         match["HG"]
+    )
+
+
+    # =========================
+    # Elo更新
+    # =========================
+
+    # ホームチームの期待勝率
+    home_expected = (
+        1 /
+        (
+            1 +
+            10 ** (
+                (away_elo - home_elo) /
+                400
+            )
+        )
+    )
+
+    # アウェイチームの期待勝率
+    away_expected = (
+        1 - home_expected
+    )
+
+    elo[home] = (
+        home_elo +
+        K_FACTOR *
+        (
+            home_actual -
+            home_expected
+        )
+    )
+
+    elo[away] = (
+        away_elo +
+        K_FACTOR *
+        (
+            away_actual -
+            away_expected
+        )
     )
 
 
@@ -314,6 +457,13 @@ model_data["FormDiff"] = (
 model_data["GoalDiffDiff"] = (
     model_data["HomeGoalDiffBefore"] -
     model_data["AwayGoalDiffBefore"]
+)
+
+
+# Elo差
+model_data["EloDiff"] = (
+    model_data["HomeEloBefore"] -
+    model_data["AwayEloBefore"]
 )
 
 
@@ -351,7 +501,7 @@ actual_a = (
 
 
 # =========================
-# 共通の評価関数
+# 評価関数
 # =========================
 
 def calculate_metrics(
@@ -387,7 +537,31 @@ def calculate_metrics(
         (data[prob_a] - actual_a) ** 2
     )
 
-    return accuracy, log_loss, brier
+    return (
+        accuracy,
+        log_loss,
+        brier
+    )
+
+
+# =========================
+# 予測結果を作る共通関数
+# =========================
+
+def make_prediction(
+    data,
+    columns
+):
+
+    return (
+        data[columns]
+        .idxmax(axis=1)
+        .map({
+            columns[0]: "H",
+            columns[1]: "D",
+            columns[2]: "A"
+        })
+    )
 
 
 # =========================
@@ -405,7 +579,6 @@ model_data = pd.concat(
     axis=1
 )
 
-
 model_data["M1_Prediction"] = (
     model_data["PointsDiff"].apply(
         lambda x:
@@ -415,14 +588,13 @@ model_data["M1_Prediction"] = (
     )
 )
 
-
 m1_accuracy, m1_log_loss, m1_brier = (
     calculate_metrics(
         model_data,
         "M1_Prediction",
-        "Prob_H",
-        "Prob_D",
-        "Prob_A"
+        "M1_Prob_H",
+        "M1_Prob_D",
+        "M1_Prob_A"
     )
 )
 
@@ -442,23 +614,16 @@ model_data = pd.concat(
     axis=1
 )
 
-
 model_data["M2_Prediction"] = (
-    model_data[
+    make_prediction(
+        model_data,
         [
             "M2_Prob_H",
             "M2_Prob_D",
             "M2_Prob_A"
         ]
-    ]
-    .idxmax(axis=1)
-    .map({
-        "M2_Prob_H": "H",
-        "M2_Prob_D": "D",
-        "M2_Prob_A": "A"
-    })
+    )
 )
-
 
 m2_accuracy, m2_log_loss, m2_brier = (
     calculate_metrics(
@@ -489,23 +654,16 @@ model_data = pd.concat(
     axis=1
 )
 
-
 model_data["M3_Prediction"] = (
-    model_data[
+    make_prediction(
+        model_data,
         [
             "M3_Prob_H",
             "M3_Prob_D",
             "M3_Prob_A"
         ]
-    ]
-    .idxmax(axis=1)
-    .map({
-        "M3_Prob_H": "H",
-        "M3_Prob_D": "D",
-        "M3_Prob_A": "A"
-    })
+    )
 )
-
 
 m3_accuracy, m3_log_loss, m3_brier = (
     calculate_metrics(
@@ -537,23 +695,16 @@ model_data = pd.concat(
     axis=1
 )
 
-
 model_data["M4_Prediction"] = (
-    model_data[
+    make_prediction(
+        model_data,
         [
             "M4_Prob_H",
             "M4_Prob_D",
             "M4_Prob_A"
         ]
-    ]
-    .idxmax(axis=1)
-    .map({
-        "M4_Prob_H": "H",
-        "M4_Prob_D": "D",
-        "M4_Prob_A": "A"
-    })
+    )
 )
-
 
 m4_accuracy, m4_log_loss, m4_brier = (
     calculate_metrics(
@@ -562,6 +713,48 @@ m4_accuracy, m4_log_loss, m4_brier = (
         "M4_Prob_H",
         "M4_Prob_D",
         "M4_Prob_A"
+    )
+)
+
+
+# =========================
+# M5
+# =========================
+
+m5_probs = model_data.apply(
+    lambda row:
+    m5_probabilities(
+        row["PointsDiff"],
+        row["FormDiff"],
+        row["GoalDiffDiff"],
+        row["EloDiff"]
+    ),
+    axis=1
+)
+
+model_data = pd.concat(
+    [model_data, m5_probs],
+    axis=1
+)
+
+model_data["M5_Prediction"] = (
+    make_prediction(
+        model_data,
+        [
+            "M5_Prob_H",
+            "M5_Prob_D",
+            "M5_Prob_A"
+        ]
+    )
+)
+
+m5_accuracy, m5_log_loss, m5_brier = (
+    calculate_metrics(
+        model_data,
+        "M5_Prediction",
+        "M5_Prob_H",
+        "M5_Prob_D",
+        "M5_Prob_A"
     )
 )
 
@@ -606,7 +799,7 @@ st.write(
 
 
 st.subheader(
-    "M3：勝点差＋ホーム補正＋直近5試合"
+    "M3：M2＋直近5試合"
 )
 st.write(
     "正解率:",
@@ -639,47 +832,69 @@ st.write(
 )
 
 
+st.subheader(
+    "M5：M4＋Elo"
+)
+st.write(
+    "正解率:",
+    f"{m5_accuracy:.1%}"
+)
+st.write(
+    "Log Loss:",
+    round(m5_log_loss, 4)
+)
+st.write(
+    "Brier Score:",
+    round(m5_brier, 4)
+)
+
+
 # =========================
 # モデル比較表
 # =========================
 
 st.subheader("📋 モデル比較")
 
-
 comparison = pd.DataFrame({
+
     "モデル": [
         "M1",
         "M2",
         "M3",
-        "M4"
+        "M4",
+        "M5"
     ],
 
     "内容": [
         "勝点差",
         "勝点差＋ホーム補正",
         "M2＋直近5試合",
-        "M3＋得失点差"
+        "M3＋得失点差",
+        "M4＋Elo"
     ],
 
     "正解率": [
         m1_accuracy,
         m2_accuracy,
         m3_accuracy,
-        m4_accuracy
+        m4_accuracy,
+        m5_accuracy
     ],
 
     "Log Loss": [
         m1_log_loss,
         m2_log_loss,
         m3_log_loss,
-        m4_log_loss
+        m4_log_loss,
+        m5_log_loss
     ],
 
     "Brier Score": [
         m1_brier,
         m2_brier,
         m3_brier,
-        m4_brier
+        m4_brier,
+        m5_brier
     ]
 })
 
@@ -688,12 +903,10 @@ comparison["正解率"] = (
     comparison["正解率"] * 100
 ).round(1)
 
-
 comparison["Log Loss"] = (
     comparison["Log Loss"]
     .round(4)
 )
-
 
 comparison["Brier Score"] = (
     comparison["Brier Score"]
@@ -708,28 +921,10 @@ st.dataframe(
 
 
 # =========================
-# M1予測結果
-# =========================
-
-st.subheader("M1 予測結果")
-
-
-st.write(
-    pd.crosstab(
-        model_data["Result"],
-        model_data["M1_Prediction"],
-        rownames=["実際"],
-        colnames=["予測"]
-    )
-)
-
-
-# =========================
 # 試合予測画面
 # =========================
 
 st.header("⚽ 試合予測")
-
 
 teams = [
     "鹿島アントラーズ",
