@@ -1,4 +1,6 @@
 import streamlit as st
+import pandas as pd
+df = pd.read_csv("data/JPN.csv")
 
 st.set_page_config(
     page_title="J1 Match Predictor",
