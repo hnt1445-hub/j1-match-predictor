@@ -96,6 +96,28 @@ m2_accuracy = (
 
 st.write("M2 正解率:", f"{m2_accuracy:.1%}")
 
+# M2のLog Lossを計算
+m2_actual_prob = np.where(
+    m1["Result"] == "H", m1["M2_Prob_H"],
+    np.where(
+        m1["Result"] == "D",
+        m1["M2_Prob_D"],
+        m1["M2_Prob_A"]
+    )
+)
+
+m2_log_loss = -np.mean(np.log(m2_actual_prob))
+
+# M2のBrier Scoreを計算
+m2_brier = np.mean(
+    (m1["M2_Prob_H"] - actual_h) ** 2 +
+    (m1["M2_Prob_D"] - actual_d) ** 2 +
+    (m1["M2_Prob_A"] - actual_a) ** 2
+)
+
+st.write("M2 Log Loss:", round(m2_log_loss, 4))
+st.write("M2 Brier Score:", round(m2_brier, 4))
+
 # M1のLog Lossを計算
 actual_prob = np.where(
     m1["Result"] == "H", m1["Prob_H"],
