@@ -1,11 +1,49 @@
 import streamlit as st
 import pandas as pd
 df = pd.read_csv("data/JPN.csv")
+# 2025年J1だけを取り出す
+df_2025 = df[
+    (df["Season"] == "2025") &
+    (df["League"] == "J1 League")
+].copy()
 
-st.set_page_config(
-    page_title="J1 Match Predictor",
-    page_icon="⚽",
+# 日付順に並べる
+df_2025["Date"] = pd.to_datetime(
+    df_2025["Date"],
+    dayfirst=True
 )
+df_2025 = df_2025.sort_values("Date")
+# M1用：各試合の直前時点の勝点を計算
+points = {}
+m1_rows = []
+
+for _, match in df_2025.iterrows():
+    home = match["Home"]
+    away = match["Away"]
+
+    home_points = points.get(home, 0)
+    away_points = points.get(away, 0)
+
+    m1_rows.append({
+        "Home": home,
+        "Away": away,
+        "HomePointsBefore": home_points,
+        "AwayPointsBefore": away_points,
+        "PointsDiff": home_points - away_points
+    })
+
+    if match["HG"] > match["AG"]:
+        points[home] = home_points + 3
+        points[away] = away_points
+    elif match["HG"] < match["AG"]:
+        points[home] = home_points
+        points[away] = away_points + 3
+    else:
+        points[home] = home_points + 1
+        points[away] = away_points + 1
+
+m1 = pd.DataFrame(m1_rows)
+
 
 st.title("⚽ J1 Match Predictor")
 st.write("J1リーグの試合結果を予測するアプリです。")
