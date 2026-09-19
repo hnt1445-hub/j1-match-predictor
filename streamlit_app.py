@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 df = pd.read_csv("data/JPN.csv")
 # 2025年J1だけを取り出す
 df_2025 = df[
