@@ -5,245 +5,180 @@ import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
-from sklearn.metrics import log_loss
 
 
-# ==================================================
+# =========================================================
 # 基本設定
-# ==================================================
+# =========================================================
 
 st.set_page_config(
     page_title="J1 Match Predictor",
     page_icon="⚽",
+    layout="wide"
 )
 
 st.title("⚽ J1 Match Predictor")
 st.write(
-    "2025年J1リーグの試合データを使って予測モデルを比較します。"
+    "過去シーズンを学習し、2025年J1全380試合を"
+    "時系列順にバックテストします。"
 )
 
 
-# ==================================================
+# =========================================================
 # データ読み込み
-# ==================================================
+# =========================================================
 
 df = pd.read_csv("data/JPN.csv")
 
-df_2025 = df[
-    (df["Season"] == "2025") &
-    (df["League"] == "J1 League")
+j1 = df[
+    df["League"] == "J1 League"
 ].copy()
 
-df_2025["Date"] = pd.to_datetime(
-    df_2025["Date"],
-    dayfirst=True
+j1["Season"] = j1["Season"].astype(str)
+
+j1["Date"] = pd.to_datetime(
+    j1["Date"],
+    dayfirst=True,
+    errors="coerce"
 )
 
-df_2025 = (
-    df_2025
-    .sort_values("Date")
-    .reset_index(drop=True)
+j1 = j1.dropna(
+    subset=[
+        "Date",
+        "Home",
+        "Away",
+        "HG",
+        "AG"
+    ]
+).copy()
+
+j1 = j1.sort_values(
+    ["Date"]
+).reset_index(drop=True)
+
+
+# =========================================================
+# 基本情報
+# =========================================================
+
+st.header("📚 使用データ")
+
+col1, col2, col3 = st.columns(3)
+
+col1.metric(
+    "J1総試合数",
+    len(j1)
+)
+
+col2.metric(
+    "シーズン数",
+    j1["Season"].nunique()
+)
+
+col3.metric(
+    "2025年試合数",
+    (
+        j1["Season"] == "2025"
+    ).sum()
 )
 
 
-# ==================================================
-# 手作りモデル共通関数
-# ==================================================
-
-def strength_to_probabilities(
-    strength,
-    prefix
-):
-
-    home_score = np.exp(
-        strength / 10
-    )
-
-    away_score = np.exp(
-        -strength / 10
-    )
-
-    draw_score = 1.0
-
-    total = (
-        home_score +
-        draw_score +
-        away_score
-    )
-
-    return pd.Series({
-        f"{prefix}_Prob_H":
-            home_score / total,
-
-        f"{prefix}_Prob_D":
-            draw_score / total,
-
-        f"{prefix}_Prob_A":
-            away_score / total
-    })
-
-
-# ==================================================
-# M1〜M6
-# ==================================================
-
-def m1_probabilities(
-    points_diff
-):
-
-    return strength_to_probabilities(
-        points_diff,
-        "M1"
-    )
-
-
-def m2_probabilities(
-    points_diff
-):
-
-    strength = (
-        points_diff +
-        2.0
-    )
-
-    return strength_to_probabilities(
-        strength,
-        "M2"
-    )
-
-
-def m3_probabilities(
-    points_diff,
-    form_diff
-):
-
-    strength = (
-        points_diff +
-        2.0 +
-        form_diff * 0.5
-    )
-
-    return strength_to_probabilities(
-        strength,
-        "M3"
-    )
-
-
-def m4_probabilities(
-    points_diff,
-    form_diff,
-    goal_diff_diff
-):
-
-    strength = (
-        points_diff +
-        2.0 +
-        form_diff * 0.5 +
-        goal_diff_diff * 0.2
-    )
-
-    return strength_to_probabilities(
-        strength,
-        "M4"
-    )
-
-
-def m5_probabilities(
-    points_diff,
-    form_diff,
-    goal_diff_diff,
-    elo_diff
-):
-
-    strength = (
-        points_diff +
-        2.0 +
-        form_diff * 0.5 +
-        goal_diff_diff * 0.2 +
-        elo_diff * 0.02
-    )
-
-    return strength_to_probabilities(
-        strength,
-        "M5"
-    )
-
-
-def m6_probabilities(
-    points_diff,
-    form_diff,
-    goal_diff_diff,
-    elo_diff,
-    attack_defense_diff
-):
-
-    strength = (
-        points_diff +
-        2.0 +
-        form_diff * 0.5 +
-        goal_diff_diff * 0.2 +
-        elo_diff * 0.02 +
-        attack_defense_diff * 2.0
-    )
-
-    return strength_to_probabilities(
-        strength,
-        "M6"
-    )
-
-
-# ==================================================
-# 試合前特徴量を作成
-# ==================================================
-
-points = {}
-recent_points = {}
-
-goals_for = {}
-goals_against = {}
-
-matches_played = {}
+# =========================================================
+# 特徴量作成
+#
+# 全シーズンを古い順に処理する
+#
+# 重要：
+# 特徴量を記録してから試合結果を反映する
+# =========================================================
 
 elo = {}
 
+season_points = {}
+season_recent = {}
+
+long_goals_for = {}
+long_goals_against = {}
+long_matches = {}
+
+season_goals_for = {}
+season_goals_against = {}
+season_matches = {}
+
+feature_rows = []
+
+current_season = None
+
 K_FACTOR = 20
 
-model_rows = []
 
+for _, match in j1.iterrows():
 
-for _, match in df_2025.iterrows():
+    season = str(
+        match["Season"]
+    )
 
     home = match["Home"]
     away = match["Away"]
 
-    hg = match["HG"]
-    ag = match["AG"]
+    hg = float(
+        match["HG"]
+    )
 
-    # ----------------------------------------------
-    # 試合前の勝点
-    # ----------------------------------------------
+    ag = float(
+        match["AG"]
+    )
 
-    home_points = points.get(
+
+    # -----------------------------------------------------
+    # 新しいシーズンになったら
+    # シーズン内の数字だけリセット
+    #
+    # Eloと長期攻撃・守備情報は引き継ぐ
+    # -----------------------------------------------------
+
+    if season != current_season:
+
+        season_points = {}
+        season_recent = {}
+
+        season_goals_for = {}
+        season_goals_against = {}
+        season_matches = {}
+
+        current_season = season
+
+
+    # -----------------------------------------------------
+    # 試合前：シーズン勝点
+    # -----------------------------------------------------
+
+    home_points = season_points.get(
         home,
         0
     )
 
-    away_points = points.get(
+    away_points = season_points.get(
         away,
         0
     )
 
+    points_diff = (
+        home_points -
+        away_points
+    )
 
-    # ----------------------------------------------
-    # 直近5試合
-    # ----------------------------------------------
 
-    home_recent = recent_points.get(
+    # -----------------------------------------------------
+    # 試合前：直近5試合
+    # -----------------------------------------------------
+
+    home_recent = season_recent.get(
         home,
         []
     )
 
-    away_recent = recent_points.get(
+    away_recent = season_recent.get(
         away,
         []
     )
@@ -256,121 +191,65 @@ for _, match in df_2025.iterrows():
         away_recent[-5:]
     )
 
-
-    # ----------------------------------------------
-    # 得点・失点
-    # ----------------------------------------------
-
-    home_gf = goals_for.get(
-        home,
-        0
-    )
-
-    home_ga = goals_against.get(
-        home,
-        0
-    )
-
-    away_gf = goals_for.get(
-        away,
-        0
-    )
-
-    away_ga = goals_against.get(
-        away,
-        0
+    form_diff = (
+        home_form -
+        away_form
     )
 
 
-    # ----------------------------------------------
-    # 試合数
-    # ----------------------------------------------
+    # -----------------------------------------------------
+    # 試合前：シーズン得失点差
+    # -----------------------------------------------------
 
-    home_matches = matches_played.get(
-        home,
-        0
+    home_season_gf = (
+        season_goals_for.get(
+            home,
+            0
+        )
     )
 
-    away_matches = matches_played.get(
-        away,
-        0
+    home_season_ga = (
+        season_goals_against.get(
+            home,
+            0
+        )
     )
 
+    away_season_gf = (
+        season_goals_for.get(
+            away,
+            0
+        )
+    )
 
-    # ----------------------------------------------
-    # 得失点差
-    # ----------------------------------------------
+    away_season_ga = (
+        season_goals_against.get(
+            away,
+            0
+        )
+    )
 
     home_goal_diff = (
-        home_gf -
-        home_ga
+        home_season_gf -
+        home_season_ga
     )
 
     away_goal_diff = (
-        away_gf -
-        away_ga
+        away_season_gf -
+        away_season_ga
+    )
+
+    goal_diff_diff = (
+        home_goal_diff -
+        away_goal_diff
     )
 
 
-    # ----------------------------------------------
-    # 攻撃・守備
-    # ----------------------------------------------
-
-    if home_matches > 0:
-
-        home_attack = (
-            home_gf /
-            home_matches
-        )
-
-        home_defense = (
-            home_ga /
-            home_matches
-        )
-
-    else:
-
-        home_attack = 0.0
-        home_defense = 0.0
-
-
-    if away_matches > 0:
-
-        away_attack = (
-            away_gf /
-            away_matches
-        )
-
-        away_defense = (
-            away_ga /
-            away_matches
-        )
-
-    else:
-
-        away_attack = 0.0
-        away_defense = 0.0
-
-
-    home_attack_edge = (
-        home_attack -
-        away_defense
-    )
-
-    away_attack_edge = (
-        away_attack -
-        home_defense
-    )
-
-    attack_defense_diff = (
-        home_attack_edge -
-        away_attack_edge
-    )
-
-
-    # ----------------------------------------------
-    # Elo
-    # ----------------------------------------------
+    # -----------------------------------------------------
+    # 試合前：Elo
+    #
+    # シーズンをまたいで引き継ぐ
+    # -----------------------------------------------------
 
     home_elo = elo.get(
         home,
@@ -382,12 +261,136 @@ for _, match in df_2025.iterrows():
         1500.0
     )
 
+    elo_diff = (
+        home_elo -
+        away_elo
+    )
 
-    # ----------------------------------------------
+
+    # -----------------------------------------------------
+    # 試合前：長期攻撃・守備
+    #
+    # 過去シーズンも含めて蓄積
+    # -----------------------------------------------------
+
+    home_long_matches = (
+        long_matches.get(
+            home,
+            0
+        )
+    )
+
+    away_long_matches = (
+        long_matches.get(
+            away,
+            0
+        )
+    )
+
+
+    if home_long_matches > 0:
+
+        home_attack = (
+            long_goals_for.get(
+                home,
+                0
+            )
+            /
+            home_long_matches
+        )
+
+        home_concede = (
+            long_goals_against.get(
+                home,
+                0
+            )
+            /
+            home_long_matches
+        )
+
+    else:
+
+        home_attack = 1.0
+        home_concede = 1.0
+
+
+    if away_long_matches > 0:
+
+        away_attack = (
+            long_goals_for.get(
+                away,
+                0
+            )
+            /
+            away_long_matches
+        )
+
+        away_concede = (
+            long_goals_against.get(
+                away,
+                0
+            )
+            /
+            away_long_matches
+        )
+
+    else:
+
+        away_attack = 1.0
+        away_concede = 1.0
+
+
+    # -----------------------------------------------------
+    # 攻撃・守備の組み合わせ
+    #
+    # ホームの攻撃力が高い
+    # ＋
+    # アウェイの平均失点が多い
+    #
+    # → ホーム側に有利
+    # -----------------------------------------------------
+
+    home_scoring_signal = (
+        home_attack +
+        away_concede
+    )
+
+    away_scoring_signal = (
+        away_attack +
+        home_concede
+    )
+
+    attack_defense_diff = (
+        home_scoring_signal -
+        away_scoring_signal
+    )
+
+
+    # -----------------------------------------------------
+    # 実際の結果
+    # -----------------------------------------------------
+
+    if hg > ag:
+
+        result = "H"
+
+    elif hg < ag:
+
+        result = "A"
+
+    else:
+
+        result = "D"
+
+
+    # -----------------------------------------------------
     # 試合前情報を保存
-    # ----------------------------------------------
+    # -----------------------------------------------------
 
-    model_rows.append({
+    feature_rows.append({
+
+        "Season":
+            season,
 
         "Date":
             match["Date"],
@@ -398,56 +401,56 @@ for _, match in df_2025.iterrows():
         "Away":
             away,
 
-        "HomePointsBefore":
-            home_points,
-
-        "AwayPointsBefore":
-            away_points,
+        "Result":
+            result,
 
         "PointsDiff":
-            home_points -
-            away_points,
+            points_diff,
 
-        "HomeForm5":
-            home_form,
+        "FormDiff":
+            form_diff,
 
-        "AwayForm5":
-            away_form,
+        "GoalDiffDiff":
+            goal_diff_diff,
 
-        "HomeGoalDiffBefore":
-            home_goal_diff,
-
-        "AwayGoalDiffBefore":
-            away_goal_diff,
-
-        "HomeEloBefore":
-            home_elo,
-
-        "AwayEloBefore":
-            away_elo,
-
-        "HomeAttackBefore":
-            home_attack,
-
-        "AwayAttackBefore":
-            away_attack,
-
-        "HomeDefenseBefore":
-            home_defense,
-
-        "AwayDefenseBefore":
-            away_defense,
+        "EloDiff":
+            elo_diff,
 
         "AttackDefenseDiff":
-            attack_defense_diff
+            attack_defense_diff,
+
+        "HomeElo":
+            home_elo,
+
+        "AwayElo":
+            away_elo,
+
+        "HomeAttack":
+            home_attack,
+
+        "AwayAttack":
+            away_attack,
+
+        "HomeConcede":
+            home_concede,
+
+        "AwayConcede":
+            away_concede
     })
 
 
-    # ==================================================
-    # ここから試合終了後の更新
-    # ==================================================
+    # =====================================================
+    # ここから下は試合終了後
+    #
+    # ここで初めて今回の結果を反映する
+    # =====================================================
 
-    if hg > ag:
+
+    # -----------------------------------------------------
+    # 勝点
+    # -----------------------------------------------------
+
+    if result == "H":
 
         home_match_points = 3
         away_match_points = 0
@@ -455,7 +458,7 @@ for _, match in df_2025.iterrows():
         home_actual = 1.0
         away_actual = 0.0
 
-    elif hg < ag:
+    elif result == "A":
 
         home_match_points = 0
         away_match_points = 3
@@ -472,27 +475,29 @@ for _, match in df_2025.iterrows():
         away_actual = 0.5
 
 
-    # 勝点
-    points[home] = (
+    season_points[home] = (
         home_points +
         home_match_points
     )
 
-    points[away] = (
+    season_points[away] = (
         away_points +
         away_match_points
     )
 
 
-    # 直近成績
-    recent_points.setdefault(
+    # -----------------------------------------------------
+    # 直近5試合
+    # -----------------------------------------------------
+
+    season_recent.setdefault(
         home,
         []
     ).append(
         home_match_points
     )
 
-    recent_points.setdefault(
+    season_recent.setdefault(
         away,
         []
     ).append(
@@ -500,48 +505,109 @@ for _, match in df_2025.iterrows():
     )
 
 
-    # 得点・失点
-    goals_for[home] = (
-        home_gf +
+    # -----------------------------------------------------
+    # シーズン得失点
+    # -----------------------------------------------------
+
+    season_goals_for[home] = (
+        home_season_gf +
         hg
     )
 
-    goals_against[home] = (
-        home_ga +
+    season_goals_against[home] = (
+        home_season_ga +
         ag
     )
 
-    goals_for[away] = (
-        away_gf +
+    season_goals_for[away] = (
+        away_season_gf +
         ag
     )
 
-    goals_against[away] = (
-        away_ga +
+    season_goals_against[away] = (
+        away_season_ga +
         hg
     )
 
-
-    # 試合数
-    matches_played[home] = (
-        home_matches + 1
+    season_matches[home] = (
+        season_matches.get(
+            home,
+            0
+        ) + 1
     )
 
-    matches_played[away] = (
-        away_matches + 1
+    season_matches[away] = (
+        season_matches.get(
+            away,
+            0
+        ) + 1
     )
 
 
-    # Elo
+    # -----------------------------------------------------
+    # 長期攻撃・守備
+    # -----------------------------------------------------
+
+    long_goals_for[home] = (
+        long_goals_for.get(
+            home,
+            0
+        ) +
+        hg
+    )
+
+    long_goals_against[home] = (
+        long_goals_against.get(
+            home,
+            0
+        ) +
+        ag
+    )
+
+    long_goals_for[away] = (
+        long_goals_for.get(
+            away,
+            0
+        ) +
+        ag
+    )
+
+    long_goals_against[away] = (
+        long_goals_against.get(
+            away,
+            0
+        ) +
+        hg
+    )
+
+    long_matches[home] = (
+        home_long_matches +
+        1
+    )
+
+    long_matches[away] = (
+        away_long_matches +
+        1
+    )
+
+
+    # -----------------------------------------------------
+    # Elo更新
+    # -----------------------------------------------------
+
     home_expected = (
-        1 /
+        1
+        /
         (
-            1 +
-            10 ** (
+            1
+            +
+            10 **
+            (
                 (
                     away_elo -
                     home_elo
-                ) /
+                )
+                /
                 400
             )
         )
@@ -552,9 +618,12 @@ for _, match in df_2025.iterrows():
         home_expected
     )
 
+
     elo[home] = (
-        home_elo +
-        K_FACTOR *
+        home_elo
+        +
+        K_FACTOR
+        *
         (
             home_actual -
             home_expected
@@ -562,8 +631,10 @@ for _, match in df_2025.iterrows():
     )
 
     elo[away] = (
-        away_elo +
-        K_FACTOR *
+        away_elo
+        +
+        K_FACTOR
+        *
         (
             away_actual -
             away_expected
@@ -571,909 +642,640 @@ for _, match in df_2025.iterrows():
     )
 
 
-# ==================================================
-# DataFrame
-# ==================================================
+# =========================================================
+# 特徴量DataFrame
+# =========================================================
 
-model_data = pd.DataFrame(
-    model_rows
+data = pd.DataFrame(
+    feature_rows
 )
 
+data = data.sort_values(
+    "Date"
+).reset_index(drop=True)
 
-model_data["FormDiff"] = (
-    model_data["HomeForm5"] -
-    model_data["AwayForm5"]
-)
 
+# =========================================================
+# M8で使用する特徴量
+# =========================================================
 
-model_data["GoalDiffDiff"] = (
-    model_data[
-        "HomeGoalDiffBefore"
-    ] -
-    model_data[
-        "AwayGoalDiffBefore"
-    ]
-)
+FEATURES = [
 
-
-model_data["EloDiff"] = (
-    model_data[
-        "HomeEloBefore"
-    ] -
-    model_data[
-        "AwayEloBefore"
-    ]
-)
-
-
-# ホーム開催を示す特徴量
-# 全行ホームチーム視点なので1
-model_data["HomeFlag"] = 1.0
-
-
-# ==================================================
-# 実際の結果
-# ==================================================
-
-model_data["Result"] = [
-    "H" if hg > ag else
-    "A" if hg < ag else
-    "D"
-
-    for hg, ag in zip(
-        df_2025["HG"],
-        df_2025["AG"]
-    )
-]
-
-
-actual_h = (
-    model_data["Result"] == "H"
-).astype(int)
-
-actual_d = (
-    model_data["Result"] == "D"
-).astype(int)
-
-actual_a = (
-    model_data["Result"] == "A"
-).astype(int)
-
-
-# ==================================================
-# 評価関数
-# ==================================================
-
-def calculate_metrics(
-    data,
-    prediction_column,
-    prob_h,
-    prob_d,
-    prob_a
-):
-
-    accuracy = (
-        data[prediction_column] ==
-        data["Result"]
-    ).mean()
-
-    actual_prob = np.where(
-        data["Result"] == "H",
-        data[prob_h],
-        np.where(
-            data["Result"] == "D",
-            data[prob_d],
-            data[prob_a]
-        )
-    )
-
-    actual_prob = np.clip(
-        actual_prob,
-        1e-15,
-        1.0
-    )
-
-    model_log_loss = -np.mean(
-        np.log(actual_prob)
-    )
-
-    brier = np.mean(
-        (
-            data[prob_h] -
-            (
-                data["Result"] == "H"
-            ).astype(int)
-        ) ** 2
-        +
-        (
-            data[prob_d] -
-            (
-                data["Result"] == "D"
-            ).astype(int)
-        ) ** 2
-        +
-        (
-            data[prob_a] -
-            (
-                data["Result"] == "A"
-            ).astype(int)
-        ) ** 2
-    )
-
-    return (
-        accuracy,
-        model_log_loss,
-        brier
-    )
-
-
-def make_prediction(
-    data,
-    columns
-):
-
-    return (
-        data[columns]
-        .idxmax(axis=1)
-        .map({
-            columns[0]: "H",
-            columns[1]: "D",
-            columns[2]: "A"
-        })
-    )
-
-
-# ==================================================
-# M1
-# ==================================================
-
-m1_probs = model_data[
-    "PointsDiff"
-].apply(
-    m1_probabilities
-)
-
-model_data = pd.concat(
-    [model_data, m1_probs],
-    axis=1
-)
-
-model_data["M1_Prediction"] = (
-    model_data[
-        "PointsDiff"
-    ].apply(
-        lambda x:
-        "H" if x > 0 else
-        "A" if x < 0 else
-        "D"
-    )
-)
-
-
-# ==================================================
-# M2
-# ==================================================
-
-m2_probs = model_data[
-    "PointsDiff"
-].apply(
-    m2_probabilities
-)
-
-model_data = pd.concat(
-    [model_data, m2_probs],
-    axis=1
-)
-
-model_data["M2_Prediction"] = (
-    make_prediction(
-        model_data,
-        [
-            "M2_Prob_H",
-            "M2_Prob_D",
-            "M2_Prob_A"
-        ]
-    )
-)
-
-
-# ==================================================
-# M3
-# ==================================================
-
-m3_probs = model_data.apply(
-    lambda row:
-    m3_probabilities(
-        row["PointsDiff"],
-        row["FormDiff"]
-    ),
-    axis=1
-)
-
-model_data = pd.concat(
-    [model_data, m3_probs],
-    axis=1
-)
-
-model_data["M3_Prediction"] = (
-    make_prediction(
-        model_data,
-        [
-            "M3_Prob_H",
-            "M3_Prob_D",
-            "M3_Prob_A"
-        ]
-    )
-)
-
-
-# ==================================================
-# M4
-# ==================================================
-
-m4_probs = model_data.apply(
-    lambda row:
-    m4_probabilities(
-        row["PointsDiff"],
-        row["FormDiff"],
-        row["GoalDiffDiff"]
-    ),
-    axis=1
-)
-
-model_data = pd.concat(
-    [model_data, m4_probs],
-    axis=1
-)
-
-model_data["M4_Prediction"] = (
-    make_prediction(
-        model_data,
-        [
-            "M4_Prob_H",
-            "M4_Prob_D",
-            "M4_Prob_A"
-        ]
-    )
-)
-
-
-# ==================================================
-# M5
-# ==================================================
-
-m5_probs = model_data.apply(
-    lambda row:
-    m5_probabilities(
-        row["PointsDiff"],
-        row["FormDiff"],
-        row["GoalDiffDiff"],
-        row["EloDiff"]
-    ),
-    axis=1
-)
-
-model_data = pd.concat(
-    [model_data, m5_probs],
-    axis=1
-)
-
-model_data["M5_Prediction"] = (
-    make_prediction(
-        model_data,
-        [
-            "M5_Prob_H",
-            "M5_Prob_D",
-            "M5_Prob_A"
-        ]
-    )
-)
-
-
-# ==================================================
-# M6
-# ==================================================
-
-m6_probs = model_data.apply(
-    lambda row:
-    m6_probabilities(
-        row["PointsDiff"],
-        row["FormDiff"],
-        row["GoalDiffDiff"],
-        row["EloDiff"],
-        row["AttackDefenseDiff"]
-    ),
-    axis=1
-)
-
-model_data = pd.concat(
-    [model_data, m6_probs],
-    axis=1
-)
-
-model_data["M6_Prediction"] = (
-    make_prediction(
-        model_data,
-        [
-            "M6_Prob_H",
-            "M6_Prob_D",
-            "M6_Prob_A"
-        ]
-    )
-)
-
-
-# ==================================================
-# M1〜M6の380試合評価
-# ==================================================
-
-manual_metrics = {}
-
-
-for model in [
-    "M1",
-    "M2",
-    "M3",
-    "M4",
-    "M5",
-    "M6"
-]:
-
-    manual_metrics[model] = (
-        calculate_metrics(
-            model_data,
-            f"{model}_Prediction",
-            f"{model}_Prob_H",
-            f"{model}_Prob_D",
-            f"{model}_Prob_A"
-        )
-    )
-
-
-# ==================================================
-# M7
-# ロジスティック回帰
-# ウォークフォワード検証
-# ==================================================
-
-feature_columns = [
     "PointsDiff",
+
     "FormDiff",
+
     "GoalDiffDiff",
+
     "EloDiff",
+
     "AttackDefenseDiff"
 ]
 
 
-INITIAL_TRAIN_SIZE = 100
+# =========================================================
+# 評価関数
+# =========================================================
 
-
-m7_predictions = []
-
-m7_prob_h = []
-m7_prob_d = []
-m7_prob_a = []
-
-m7_indexes = []
-
-
-# ----------------------------------------------
-# 100試合を学習した後、
-# 101試合目を予測
-#
-# 次に101試合を学習して
-# 102試合目を予測
-#
-# という処理を繰り返す
-# ----------------------------------------------
-
-for test_index in range(
-    INITIAL_TRAIN_SIZE,
-    len(model_data)
+def evaluate_predictions(
+    result_df
 ):
 
-    train_data = (
-        model_data
-        .iloc[:test_index]
-        .copy()
-    )
-
-    test_data = (
-        model_data
-        .iloc[[test_index]]
-        .copy()
-    )
+    accuracy = (
+        result_df["Prediction"]
+        ==
+        result_df["Result"]
+    ).mean()
 
 
-    X_train = (
-        train_data[
-            feature_columns
-        ]
-    )
+    actual_probability = np.where(
 
-    y_train = (
-        train_data["Result"]
-    )
+        result_df["Result"] == "H",
 
-    X_test = (
-        test_data[
-            feature_columns
-        ]
+        result_df["Prob_H"],
+
+        np.where(
+
+            result_df["Result"] == "D",
+
+            result_df["Prob_D"],
+
+            result_df["Prob_A"]
+        )
     )
 
 
-    # ------------------------------------------
-    # 標準化＋ロジスティック回帰
-    # ------------------------------------------
+    actual_probability = np.clip(
+        actual_probability,
+        1e-15,
+        1.0
+    )
 
-    m7_model = Pipeline([
-        (
-            "scaler",
-            StandardScaler()
-        ),
-        (
-            "model",
-            LogisticRegression(
-                max_iter=2000,
-                random_state=42
+
+    model_log_loss = (
+        -np.mean(
+            np.log(
+                actual_probability
             )
         )
-    ])
-
-
-    m7_model.fit(
-        X_train,
-        y_train
     )
 
 
-    probabilities = (
-        m7_model.predict_proba(
-            X_test
-        )[0]
+    actual_h = (
+        result_df["Result"] == "H"
+    ).astype(int)
+
+    actual_d = (
+        result_df["Result"] == "D"
+    ).astype(int)
+
+    actual_a = (
+        result_df["Result"] == "A"
+    ).astype(int)
+
+
+    brier = np.mean(
+
+        (
+            result_df["Prob_H"]
+            -
+            actual_h
+        ) ** 2
+
+        +
+
+        (
+            result_df["Prob_D"]
+            -
+            actual_d
+        ) ** 2
+
+        +
+
+        (
+            result_df["Prob_A"]
+            -
+            actual_a
+        ) ** 2
     )
 
-    classes = (
-        m7_model
-        .named_steps["model"]
-        .classes_
-    )
+
+    actual_draws = (
+        result_df["Result"]
+        ==
+        "D"
+    ).sum()
 
 
-    probability_map = dict(
-        zip(
-            classes,
-            probabilities
+    correct_draws = (
+        (
+            result_df["Result"]
+            ==
+            "D"
         )
-    )
-
-
-    prob_h = (
-        probability_map.get(
-            "H",
-            0.0
+        &
+        (
+            result_df["Prediction"]
+            ==
+            "D"
         )
-    )
+    ).sum()
 
-    prob_d = (
-        probability_map.get(
-            "D",
-            0.0
+
+    if actual_draws > 0:
+
+        draw_recall = (
+            correct_draws
+            /
+            actual_draws
         )
+
+    else:
+
+        draw_recall = 0.0
+
+
+    return {
+
+        "Accuracy":
+            accuracy,
+
+        "LogLoss":
+            model_log_loss,
+
+        "Brier":
+            brier,
+
+        "DrawRecall":
+            draw_recall,
+
+        "Correct":
+            int(
+                (
+                    result_df["Prediction"]
+                    ==
+                    result_df["Result"]
+                ).sum()
+            )
+    }
+
+
+# =========================================================
+# ウォークフォワード関数
+#
+# target_seasonを1試合ずつ予測
+#
+# window_size
+# 500 / 1000 / 2000 / None(全部)
+# =========================================================
+
+def run_walk_forward(
+    full_data,
+    target_season,
+    window_size=None
+):
+
+    target_indexes = (
+        full_data.index[
+            full_data["Season"]
+            ==
+            target_season
+        ].tolist()
     )
 
-    prob_a = (
-        probability_map.get(
-            "A",
-            0.0
+
+    predictions = []
+
+
+    for test_index in target_indexes:
+
+        # ---------------------------------------------
+        # この試合より過去だけ
+        # ---------------------------------------------
+
+        train_data = (
+            full_data.iloc[
+                :test_index
+            ].copy()
         )
+
+
+        # ---------------------------------------------
+        # 直近N試合だけにする
+        # ---------------------------------------------
+
+        if (
+            window_size
+            is not None
+        ):
+
+            train_data = (
+                train_data.tail(
+                    window_size
+                )
+            )
+
+
+        # ---------------------------------------------
+        # 学習
+        # ---------------------------------------------
+
+        X_train = (
+            train_data[
+                FEATURES
+            ]
+        )
+
+        y_train = (
+            train_data[
+                "Result"
+            ]
+        )
+
+
+        X_test = (
+            full_data
+            .loc[
+                [test_index],
+                FEATURES
+            ]
+        )
+
+
+        model = Pipeline([
+
+            (
+                "scaler",
+                StandardScaler()
+            ),
+
+            (
+                "model",
+                LogisticRegression(
+                    max_iter=2000,
+                    random_state=42
+                )
+            )
+        ])
+
+
+        model.fit(
+            X_train,
+            y_train
+        )
+
+
+        probabilities = (
+            model.predict_proba(
+                X_test
+            )[0]
+        )
+
+
+        classes = (
+            model
+            .named_steps[
+                "model"
+            ]
+            .classes_
+        )
+
+
+        probability_map = dict(
+            zip(
+                classes,
+                probabilities
+            )
+        )
+
+
+        prob_h = (
+            probability_map.get(
+                "H",
+                0.0
+            )
+        )
+
+        prob_d = (
+            probability_map.get(
+                "D",
+                0.0
+            )
+        )
+
+        prob_a = (
+            probability_map.get(
+                "A",
+                0.0
+            )
+        )
+
+
+        probability_dict = {
+
+            "H":
+                prob_h,
+
+            "D":
+                prob_d,
+
+            "A":
+                prob_a
+        }
+
+
+        prediction = max(
+            probability_dict,
+            key=probability_dict.get
+        )
+
+
+        row = (
+            full_data
+            .loc[test_index]
+        )
+
+
+        predictions.append({
+
+            "Index":
+                test_index,
+
+            "Season":
+                row["Season"],
+
+            "Date":
+                row["Date"],
+
+            "Home":
+                row["Home"],
+
+            "Away":
+                row["Away"],
+
+            "Result":
+                row["Result"],
+
+            "Prediction":
+                prediction,
+
+            "Prob_H":
+                prob_h,
+
+            "Prob_D":
+                prob_d,
+
+            "Prob_A":
+                prob_a
+        })
+
+
+    return pd.DataFrame(
+        predictions
     )
 
 
-    prediction = max(
-        {
-            "H": prob_h,
-            "D": prob_d,
-            "A": prob_a
-        },
-        key={
-            "H": prob_h,
-            "D": prob_d,
-            "A": prob_a
-        }.get
-    )
-
-
-    m7_indexes.append(
-        test_index
-    )
-
-    m7_predictions.append(
-        prediction
-    )
-
-    m7_prob_h.append(
-        prob_h
-    )
-
-    m7_prob_d.append(
-        prob_d
-    )
-
-    m7_prob_a.append(
-        prob_a
-    )
-
-
-# ==================================================
-# M7評価用データ
-# ==================================================
-
-m7_data = (
-    model_data
-    .iloc[m7_indexes]
-    .copy()
-)
-
-
-m7_data[
-    "M7_Prediction"
-] = m7_predictions
-
-m7_data[
-    "M7_Prob_H"
-] = m7_prob_h
-
-m7_data[
-    "M7_Prob_D"
-] = m7_prob_d
-
-m7_data[
-    "M7_Prob_A"
-] = m7_prob_a
-
-
-m7_accuracy, m7_log_loss, m7_brier = (
-    calculate_metrics(
-        m7_data,
-        "M7_Prediction",
-        "M7_Prob_H",
-        "M7_Prob_D",
-        "M7_Prob_A"
-    )
-)
-
-
-# ==================================================
-# M7 引き分けRecall
-# ==================================================
-
-m7_actual_draws = (
-    m7_data["Result"] == "D"
-).sum()
-
-
-m7_correct_draws = (
-    (
-        m7_data["Result"] == "D"
-    )
-    &
-    (
-        m7_data[
-            "M7_Prediction"
-        ] == "D"
-    )
-).sum()
-
-
-if m7_actual_draws > 0:
-
-    m7_draw_recall = (
-        m7_correct_draws /
-        m7_actual_draws
-    )
-
-else:
-
-    m7_draw_recall = 0.0
-
-
-# ==================================================
-# 公平比較
-# M2もM7と同じ280試合だけで評価
-# ==================================================
-
-m2_same_period = (
-    model_data
-    .iloc[
-        INITIAL_TRAIN_SIZE:
-    ]
-    .copy()
-)
-
-
-(
-    m2_same_accuracy,
-    m2_same_log_loss,
-    m2_same_brier
-) = calculate_metrics(
-    m2_same_period,
-    "M2_Prediction",
-    "M2_Prob_H",
-    "M2_Prob_D",
-    "M2_Prob_A"
-)
-
-
-m2_same_actual_draws = (
-    m2_same_period[
-        "Result"
-    ] == "D"
-).sum()
-
-
-m2_same_correct_draws = (
-    (
-        m2_same_period[
-            "Result"
-        ] == "D"
-    )
-    &
-    (
-        m2_same_period[
-            "M2_Prediction"
-        ] == "D"
-    )
-).sum()
-
-
-if m2_same_actual_draws > 0:
-
-    m2_same_draw_recall = (
-        m2_same_correct_draws /
-        m2_same_actual_draws
-    )
-
-else:
-
-    m2_same_draw_recall = 0.0
-
-
-# ==================================================
-# 表示
-# ==================================================
+# =========================================================
+# 2024年
+#
+# モデル選択用
+# =========================================================
 
 st.header(
-    "📊 M1〜M6 手作りモデル"
+    "🧪 2024年：学習期間の比較"
+)
+
+st.write(
+    "2024年を仮想本番として、"
+    "500・1000・2000・全過去データを比較します。"
 )
 
 
-comparison_rows = []
+window_settings = {
 
+    "500試合":
+        500,
 
-model_names = {
+    "1000試合":
+        1000,
 
-    "M1":
-        "勝点差",
+    "2000試合":
+        2000,
 
-    "M2":
-        "＋ホーム補正",
-
-    "M3":
-        "＋直近5試合",
-
-    "M4":
-        "＋得失点差",
-
-    "M5":
-        "＋Elo",
-
-    "M6":
-        "＋攻撃力・守備力"
+    "ALL":
+        None
 }
 
 
-for model in [
-    "M1",
-    "M2",
-    "M3",
-    "M4",
-    "M5",
-    "M6"
-]:
+results_2024 = {}
 
-    accuracy = (
-        manual_metrics[
-            model
-        ][0]
-    )
-
-    model_log_loss = (
-        manual_metrics[
-            model
-        ][1]
-    )
-
-    brier = (
-        manual_metrics[
-            model
-        ][2]
-    )
+summary_2024 = []
 
 
-    comparison_rows.append({
+with st.spinner(
+    "2024年をバックテスト中..."
+):
 
-        "モデル":
-            model,
+    for name, window in (
+        window_settings.items()
+    ):
 
-        "内容":
-            model_names[model],
+        result = run_walk_forward(
+            data,
+            "2024",
+            window
+        )
 
-        "評価試合数":
-            len(model_data),
+        results_2024[name] = (
+            result
+        )
 
-        "正解率":
-            round(
-                accuracy * 100,
-                1
-            ),
-
-        "Log Loss":
-            round(
-                model_log_loss,
-                4
-            ),
-
-        "Brier Score":
-            round(
-                brier,
-                4
+        metrics = (
+            evaluate_predictions(
+                result
             )
-    })
+        )
 
 
-comparison = pd.DataFrame(
-    comparison_rows
+        summary_2024.append({
+
+            "学習範囲":
+                name,
+
+            "試合数":
+                len(result),
+
+            "正解数":
+                metrics[
+                    "Correct"
+                ],
+
+            "正解率":
+                round(
+                    metrics[
+                        "Accuracy"
+                    ]
+                    * 100,
+                    1
+                ),
+
+            "Log Loss":
+                round(
+                    metrics[
+                        "LogLoss"
+                    ],
+                    4
+                ),
+
+            "Brier Score":
+                round(
+                    metrics[
+                        "Brier"
+                    ],
+                    4
+                ),
+
+            "引き分けRecall":
+                round(
+                    metrics[
+                        "DrawRecall"
+                    ]
+                    * 100,
+                    1
+                )
+        })
+
+
+summary_2024_df = pd.DataFrame(
+    summary_2024
 )
-
 
 st.dataframe(
-    comparison,
-    hide_index=True
+    summary_2024_df,
+    hide_index=True,
+    use_container_width=True
 )
 
 
-# ==================================================
-# M7表示
-# ==================================================
+# =========================================================
+# 2024年でLog Lossが最小の方式
+# =========================================================
 
-st.header(
-    "🤖 M7：ロジスティック回帰"
+best_row = (
+    summary_2024_df
+    .sort_values(
+        "Log Loss"
+    )
+    .iloc[0]
 )
 
-
-st.write(
-    "方式：過去の試合だけで学習し、次の試合を予測"
-)
-
-st.write(
-    "初期学習試合数:",
-    INITIAL_TRAIN_SIZE
-)
-
-st.write(
-    "評価対象試合数:",
-    len(m7_data)
-)
-
-
-st.metric(
-    "M7 正解率",
-    f"{m7_accuracy:.1%}"
-)
-
-st.metric(
-    "M7 Log Loss",
-    f"{m7_log_loss:.4f}"
-)
-
-st.metric(
-    "M7 Brier Score",
-    f"{m7_brier:.4f}"
-)
-
-st.metric(
-    "M7 引き分けRecall",
-    f"{m7_draw_recall:.1%}"
-)
-
-
-# ==================================================
-# M2 vs M7
-# 同じ試合だけで比較
-# ==================================================
-
-st.header(
-    "⚖️ M2 vs M7 公平比較"
-)
-
-
-fair_comparison = pd.DataFrame({
-
-    "モデル": [
-        "M2",
-        "M7"
-    ],
-
-    "評価試合数": [
-        len(m2_same_period),
-        len(m7_data)
-    ],
-
-    "正解率": [
-        round(
-            m2_same_accuracy * 100,
-            1
-        ),
-        round(
-            m7_accuracy * 100,
-            1
-        )
-    ],
-
-    "Log Loss": [
-        round(
-            m2_same_log_loss,
-            4
-        ),
-        round(
-            m7_log_loss,
-            4
-        )
-    ],
-
-    "Brier Score": [
-        round(
-            m2_same_brier,
-            4
-        ),
-        round(
-            m7_brier,
-            4
-        )
-    ],
-
-    "引き分けRecall": [
-        round(
-            m2_same_draw_recall *
-            100,
-            1
-        ),
-        round(
-            m7_draw_recall *
-            100,
-            1
-        )
+best_name = (
+    best_row[
+        "学習範囲"
     ]
-})
+)
 
-
-st.dataframe(
-    fair_comparison,
-    hide_index=True
+best_window = (
+    window_settings[
+        best_name
+    ]
 )
 
 
-# ==================================================
-# M7予測内訳
-# ==================================================
+st.success(
+    "2024年のLog Lossを基準に選んだ学習範囲："
+    f"{best_name}"
+)
+
+
+# =========================================================
+# 2025年
+#
+# 最終バックテスト
+#
+# ここでは2024年で選んだ方式を使用
+# =========================================================
 
 st.header(
-    "🔍 M7 予測内訳"
+    "🏆 2025年：最終バックテスト"
+)
+
+st.write(
+    "2024年で選んだ学習範囲を固定して、"
+    "2025年全380試合を予測します。"
 )
 
 
-m7_prediction_counts = pd.DataFrame({
+with st.spinner(
+    "2025年380試合を予測中..."
+):
+
+    final_2025 = (
+        run_walk_forward(
+            data,
+            "2025",
+            best_window
+        )
+    )
+
+
+metrics_2025 = (
+    evaluate_predictions(
+        final_2025
+    )
+)
+
+
+# =========================================================
+# 2025年結果
+# =========================================================
+
+col1, col2, col3, col4 = (
+    st.columns(4)
+)
+
+
+col1.metric(
+    "正解率",
+    f"{metrics_2025['Accuracy']:.1%}"
+)
+
+col2.metric(
+    "Log Loss",
+    f"{metrics_2025['LogLoss']:.4f}"
+)
+
+col3.metric(
+    "Brier Score",
+    f"{metrics_2025['Brier']:.4f}"
+)
+
+col4.metric(
+    "引き分けRecall",
+    f"{metrics_2025['DrawRecall']:.1%}"
+)
+
+
+st.write(
+    "正解数:",
+    metrics_2025[
+        "Correct"
+    ],
+    "/",
+    len(final_2025)
+)
+
+
+# =========================================================
+# 2025年 H/D/A 内訳
+# =========================================================
+
+st.subheader(
+    "📊 2025年 H / D / A 内訳"
+)
+
+
+result_breakdown = pd.DataFrame({
 
     "結果": [
         "H",
@@ -1482,53 +1284,67 @@ m7_prediction_counts = pd.DataFrame({
     ],
 
     "実際": [
+
         int(
             (
-                m7_data[
+                final_2025[
                     "Result"
-                ] == "H"
+                ]
+                ==
+                "H"
             ).sum()
         ),
 
         int(
             (
-                m7_data[
+                final_2025[
                     "Result"
-                ] == "D"
+                ]
+                ==
+                "D"
             ).sum()
         ),
 
         int(
             (
-                m7_data[
+                final_2025[
                     "Result"
-                ] == "A"
+                ]
+                ==
+                "A"
             ).sum()
         )
     ],
 
-    "M7予測": [
+    "予測": [
+
         int(
             (
-                m7_data[
-                    "M7_Prediction"
-                ] == "H"
+                final_2025[
+                    "Prediction"
+                ]
+                ==
+                "H"
             ).sum()
         ),
 
         int(
             (
-                m7_data[
-                    "M7_Prediction"
-                ] == "D"
+                final_2025[
+                    "Prediction"
+                ]
+                ==
+                "D"
             ).sum()
         ),
 
         int(
             (
-                m7_data[
-                    "M7_Prediction"
-                ] == "A"
+                final_2025[
+                    "Prediction"
+                ]
+                ==
+                "A"
             ).sum()
         )
     ]
@@ -1536,157 +1352,185 @@ m7_prediction_counts = pd.DataFrame({
 
 
 st.dataframe(
-    m7_prediction_counts,
+    result_breakdown,
     hide_index=True
 )
 
 
-# ==================================================
-# 最近20試合のM7予測
-# ==================================================
+# =========================================================
+# 最近20試合
+# =========================================================
 
-st.header(
-    "🧪 M7 最近20試合"
+st.subheader(
+    "🔍 2025年 最後の20試合"
 )
 
 
-recent_m7 = (
-    m7_data[
-        [
-            "Date",
-            "Home",
-            "Away",
-            "Result",
-            "M7_Prediction",
-            "M7_Prob_H",
-            "M7_Prob_D",
-            "M7_Prob_A"
-        ]
-    ]
+recent = (
+    final_2025
     .tail(20)
     .copy()
 )
 
 
-recent_m7[
-    "M7_Prob_H"
+recent[
+    "Home勝率%"
 ] = (
-    recent_m7[
-        "M7_Prob_H"
-    ] * 100
+    recent[
+        "Prob_H"
+    ]
+    * 100
 ).round(1)
 
-
-recent_m7[
-    "M7_Prob_D"
+recent[
+    "引分率%"
 ] = (
-    recent_m7[
-        "M7_Prob_D"
-    ] * 100
+    recent[
+        "Prob_D"
+    ]
+    * 100
 ).round(1)
 
-
-recent_m7[
-    "M7_Prob_A"
+recent[
+    "Away勝率%"
 ] = (
-    recent_m7[
-        "M7_Prob_A"
-    ] * 100
+    recent[
+        "Prob_A"
+    ]
+    * 100
 ).round(1)
 
 
 st.dataframe(
-    recent_m7,
-    hide_index=True
+
+    recent[
+        [
+            "Date",
+            "Home",
+            "Away",
+            "Result",
+            "Prediction",
+            "Home勝率%",
+            "引分率%",
+            "Away勝率%"
+        ]
+    ],
+
+    hide_index=True,
+    use_container_width=True
 )
 
 
-# ==================================================
-# 試合予測画面
-# ==================================================
+# =========================================================
+# 参考：
+# 2025年でも4方式を比較
+#
+# ただしモデル選択には使用しない
+# =========================================================
 
 st.header(
-    "⚽ 試合予測"
+    "🔬 参考：2025年4方式比較"
+)
+
+st.caption(
+    "ここは分析用です。"
+    "2025年の結果を見て学習範囲を選び直すためには使いません。"
 )
 
 
-teams = [
-    "鹿島アントラーズ",
-    "浦和レッズ",
-    "柏レイソル",
-    "FC東京",
-    "東京ヴェルディ",
-    "FC町田ゼルビア",
-    "川崎フロンターレ",
-    "横浜F・マリノス",
-    "横浜FC",
-    "湘南ベルマーレ",
-    "アルビレックス新潟",
-    "清水エスパルス",
-    "名古屋グランパス",
-    "京都サンガF.C.",
-    "ガンバ大阪",
-    "セレッソ大阪",
-    "ヴィッセル神戸",
-    "ファジアーノ岡山",
-    "サンフレッチェ広島",
-    "アビスパ福岡",
-]
+summary_2025_all = []
 
 
-home_team = st.selectbox(
-    "🏠 ホームチーム",
-    teams
-)
-
-away_team = st.selectbox(
-    "✈️ アウェイチーム",
-    teams,
-    index=1
-)
-# ==================================================
-# M8準備：JPN.csv の過去データ確認
-# ==================================================
-
-st.header("🔎 M8準備：過去J1データ確認")
-
-j1_all = df[df["League"] == "J1 League"].copy()
-
-season_check = (
-    j1_all
-    .groupby("Season")
-    .size()
-    .reset_index(name="試合数")
-    .sort_values("Season")
-)
-
-st.write("J1データ総試合数:", len(j1_all))
-st.write("J1シーズン数:", j1_all["Season"].nunique())
-
-st.dataframe(
-    season_check,
-    hide_index=True
-)
-
-if st.button(
-    "試合を予測する"
+with st.spinner(
+    "2025年の4方式を比較中..."
 ):
 
-    if (
-        home_team ==
-        away_team
+    for name, window in (
+        window_settings.items()
     ):
 
-        st.error(
-            "ホームとアウェイには別のチームを選んでください。"
+        result = run_walk_forward(
+            data,
+            "2025",
+            window
         )
 
-    else:
-
-        st.success(
-            f"{home_team} vs {away_team}"
+        metrics = (
+            evaluate_predictions(
+                result
+            )
         )
 
-        st.info(
-            "実戦用M7予測は次のステップで接続します。"
-        )
+
+        summary_2025_all.append({
+
+            "学習範囲":
+                name,
+
+            "試合数":
+                len(result),
+
+            "正解数":
+                metrics[
+                    "Correct"
+                ],
+
+            "正解率":
+                round(
+                    metrics[
+                        "Accuracy"
+                    ]
+                    * 100,
+                    1
+                ),
+
+            "Log Loss":
+                round(
+                    metrics[
+                        "LogLoss"
+                    ],
+                    4
+                ),
+
+            "Brier Score":
+                round(
+                    metrics[
+                        "Brier"
+                    ],
+                    4
+                ),
+
+            "引き分けRecall":
+                round(
+                    metrics[
+                        "DrawRecall"
+                    ]
+                    * 100,
+                    1
+                )
+        })
+
+
+summary_2025_all_df = (
+    pd.DataFrame(
+        summary_2025_all
+    )
+)
+
+
+st.dataframe(
+    summary_2025_all_df,
+    hide_index=True,
+    use_container_width=True
+)
+
+
+# =========================================================
+# 注意書き
+# =========================================================
+
+st.info(
+    "M8では、予測対象の試合より後の結果を"
+    "学習データに使用していません。"
+    "2025年開幕戦も、2024年以前のデータだけで予測します。"
+)
