@@ -237,6 +237,18 @@ m1 = pd.concat(
     axis=1
 )
 
+m3_probs = m1.apply(
+    lambda row: m3_probabilities(
+        row["PointsDiff"],
+        row["FormDiff"]
+    ),
+    axis=1
+)
+
+m1 = pd.concat(
+    [m1, m3_probs],
+    axis=1
+)
 
 # M2の予測
 m1["M2_Prediction"] = m1[
