@@ -1644,7 +1644,29 @@ away_team = st.selectbox(
     teams,
     index=1
 )
+# ==================================================
+# M8準備：JPN.csv の過去データ確認
+# ==================================================
 
+st.header("🔎 M8準備：過去J1データ確認")
+
+j1_all = df[df["League"] == "J1 League"].copy()
+
+season_check = (
+    j1_all
+    .groupby("Season")
+    .size()
+    .reset_index(name="試合数")
+    .sort_values("Season")
+)
+
+st.write("J1データ総試合数:", len(j1_all))
+st.write("J1シーズン数:", j1_all["Season"].nunique())
+
+st.dataframe(
+    season_check,
+    hide_index=True
+)
 
 if st.button(
     "試合を予測する"
