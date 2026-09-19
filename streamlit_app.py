@@ -284,7 +284,27 @@ m2_brier = np.mean(
     (m1["M2_Prob_A"] - actual_a) ** 2
 )
 
+def m3_probabilities(points_diff, form_diff):
+    home_advantage = 2.0
+    form_weight = 0.5
 
+    strength = (
+        points_diff
+        + home_advantage
+        + form_diff * form_weight
+    )
+
+    home_score = np.exp(strength / 10)
+    away_score = np.exp(-strength / 10)
+    draw_score = 1.0
+
+    total = home_score + draw_score + away_score
+
+    return pd.Series({
+        "M3_Prob_H": home_score / total,
+        "M3_Prob_D": draw_score / total,
+        "M3_Prob_A": away_score / total
+    })
 # =========================
 # モデル評価を表示
 # =========================
