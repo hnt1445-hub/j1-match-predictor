@@ -141,9 +141,6 @@ m1_brier = np.mean(
     (m1["Prob_A"] - actual_a) ** 2
 )
 
-st.write("M1 Log Loss:", round(m1_log_loss, 4))
-st.write("M1 Brier Score:", round(m1_brier, 4))
-
 st.write("実際の結果:")
 st.write(m1["Result"].value_counts())
 st.write("M1の試合数:", len(m1))
@@ -155,6 +152,8 @@ m1["Prediction"] = m1["PointsDiff"].apply(
 m1_accuracy = (m1["Prediction"] == m1["Result"]).mean()
 
 st.write("M1 正解率:", f"{m1_accuracy:.1%}")
+st.write("M1 Log Loss:", round(m1_log_loss, 4))
+st.write("M1 Brier Score:", round(m1_brier, 4))
 st.write("M1 予測結果:")
 st.write(pd.crosstab(
     m1["Result"],
