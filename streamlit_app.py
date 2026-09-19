@@ -61,6 +61,11 @@ m1["Prob_Total"] = m1["Prob_H"] + m1["Prob_D"] + m1["Prob_A"]
 
 st.write("確率の合計チェック:")
 st.write(m1[["Prob_H", "Prob_D", "Prob_A", "Prob_Total"]].head(10))
+m1["Result"] = [
+    "H" if hg > ag else "A" if hg < ag else "D"
+    for hg, ag in zip(df_2025["HG"], df_2025["AG"])
+]
+
 # M1のLog Lossを計算
 actual_prob = np.where(
     m1["Result"] == "H", m1["Prob_H"],
@@ -82,10 +87,6 @@ m1_brier = np.mean(
 
 st.write("M1 Log Loss:", round(m1_log_loss, 4))
 st.write("M1 Brier Score:", round(m1_brier, 4))
-m1["Result"] = [
-    "H" if hg > ag else "A" if hg < ag else "D"
-    for hg, ag in zip(df_2025["HG"], df_2025["AG"])
-]
 
 st.write("実際の結果:")
 st.write(m1["Result"].value_counts())
