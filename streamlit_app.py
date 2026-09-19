@@ -100,6 +100,7 @@ for _, match in df_2025.iterrows():
 
 
 m1 = pd.DataFrame(m1_rows)
+m1["FormDiff"] = m1["HomeForm5"] - m1["AwayForm5"]
 st.write("直近5試合データの確認:")
 st.write(
     m1[
