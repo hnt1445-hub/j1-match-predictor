@@ -57,6 +57,10 @@ def m1_probabilities(points_diff):
 m1 = pd.DataFrame(m1_rows)
 m1_probs = m1["PointsDiff"].apply(m1_probabilities)
 m1 = pd.concat([m1, m1_probs], axis=1)
+m1["Prob_Total"] = m1["Prob_H"] + m1["Prob_D"] + m1["Prob_A"]
+
+st.write("確率の合計チェック:")
+st.write(m1[["Prob_H", "Prob_D", "Prob_A", "Prob_Total"]].head(10))
 m1["Result"] = [
     "H" if hg > ag else "A" if hg < ag else "D"
     for hg, ag in zip(df_2025["HG"], df_2025["AG"])
