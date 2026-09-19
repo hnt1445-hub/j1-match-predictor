@@ -54,9 +54,26 @@ def m1_probabilities(points_diff):
         "Prob_D": draw_score / total,
         "Prob_A": away_score / total
     })
+
+def m2_probabilities(points_diff):
+    home_advantage = 2.0
+
+    home_score = np.exp((points_diff + home_advantage) / 10)
+    away_score = np.exp(-(points_diff + home_advantage) / 10)
+    draw_score = 1.0
+
+    total = home_score + draw_score + away_score
+
+    return pd.Series({
+        "M2_Prob_H": home_score / total,
+        "M2_Prob_D": draw_score / total,
+        "M2_Prob_A": away_score / total
+    })
 m1 = pd.DataFrame(m1_rows)
 m1_probs = m1["PointsDiff"].apply(m1_probabilities)
 m1 = pd.concat([m1, m1_probs], axis=1)
+m2_probs = m1["PointsDiff"].apply(m2_probabilities)
+m1 = pd.concat([m1, m2_probs], axis=1)
 m1["Prob_Total"] = m1["Prob_H"] + m1["Prob_D"] + m1["Prob_A"]
 
 st.write("確率の合計チェック:")
