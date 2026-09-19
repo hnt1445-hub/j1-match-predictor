@@ -295,7 +295,6 @@ m2_brier = np.mean(
     (m1["M2_Prob_D"] - actual_d) ** 2 +
     (m1["M2_Prob_A"] - actual_a) ** 2
 )
-
 def m3_probabilities(points_diff, form_diff):
     home_advantage = 2.0
     form_weight = 0.5
