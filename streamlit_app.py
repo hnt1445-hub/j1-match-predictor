@@ -52,12 +52,12 @@ for _, match in df_2025.iterrows():
 
     home_points = points.get(home, 0)
     away_points = points.get(away, 0)
-
+    
     home_recent = recent_points.get(home, [])
-　　away_recent = recent_points.get(away, [])
+    away_recent = recent_points.get(away, [])
 
-　　home_form = sum(home_recent[-5:])
-　　away_form = sum(away_recent[-5:])
+    home_form = sum(home_recent[-5:])
+    away_form = sum(away_recent[-5:])
 
     m1_rows.append({
         "Home": home,
