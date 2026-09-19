@@ -108,6 +108,10 @@ m2_actual_prob = np.where(
 
 m2_log_loss = -np.mean(np.log(m2_actual_prob))
 
+actual_h = (m1["Result"] == "H").astype(int)
+actual_d = (m1["Result"] == "D").astype(int)
+actual_a = (m1["Result"] == "A").astype(int)
+
 # M2のBrier Scoreを計算
 m2_brier = np.mean(
     (m1["M2_Prob_H"] - actual_h) ** 2 +
