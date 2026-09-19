@@ -42,6 +42,7 @@ df_2025 = df_2025.sort_values("Date")
 # =========================
 
 points = {}
+recent_points = {}
 m1_rows = []
 
 for _, match in df_2025.iterrows():
