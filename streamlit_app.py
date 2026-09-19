@@ -100,7 +100,12 @@ for _, match in df_2025.iterrows():
 
 
 m1 = pd.DataFrame(m1_rows)
-
+st.write("直近5試合データの確認:")
+st.write(
+    m1[
+        ["Home", "Away", "HomeForm5", "AwayForm5"]
+    ].tail(20)
+)
 
 # =========================
 # 実際の試合結果
