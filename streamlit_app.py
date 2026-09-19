@@ -43,7 +43,8 @@ for _, match in df_2025.iterrows():
         points[away] = away_points + 1
 
 m1 = pd.DataFrame(m1_rows)
-
+st.write("M1の試合数:", len(m1))
+st.dataframe(m1.head(10))
 
 st.title("⚽ J1 Match Predictor")
 st.write("J1リーグの試合結果を予測するアプリです。")
