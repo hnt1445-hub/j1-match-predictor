@@ -82,6 +82,19 @@ m1["Result"] = [
     "H" if hg > ag else "A" if hg < ag else "D"
     for hg, ag in zip(df_2025["HG"], df_2025["AG"])
 ]
+m1["M2_Prediction"] = m1[
+    ["M2_Prob_H", "M2_Prob_D", "M2_Prob_A"]
+].idxmax(axis=1).map({
+    "M2_Prob_H": "H",
+    "M2_Prob_D": "D",
+    "M2_Prob_A": "A"
+})
+
+m2_accuracy = (
+    m1["M2_Prediction"] == m1["Result"]
+).mean()
+
+st.write("M2 正解率:", f"{m2_accuracy:.1%}")
 
 # M1のLog Lossを計算
 actual_prob = np.where(
