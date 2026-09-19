@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 df = pd.read_csv("data/JPN.csv")
 st.write(df[df["Season"] == 2025].head())
+st.write("2025年の試合数:", len(df[df["Season"] == 2025]))
 
 st.set_page_config(
     page_title="J1 Match Predictor",
