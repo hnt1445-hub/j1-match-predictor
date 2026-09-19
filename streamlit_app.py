@@ -52,6 +52,13 @@ st.write("実際の結果:")
 st.write(m1["Result"].value_counts())
 st.write("M1の試合数:", len(m1))
 st.dataframe(m1.head(10))
+m1["Prediction"] = m1["PointsDiff"].apply(
+    lambda x: "H" if x > 0 else "A" if x < 0 else "D"
+)
+
+m1_accuracy = (m1["Prediction"] == m1["Result"]).mean()
+
+st.write("M1 正解率:", f"{m1_accuracy:.1%}")
 
 st.title("⚽ J1 Match Predictor")
 st.write("J1リーグの試合結果を予測するアプリです。")
