@@ -42,7 +42,18 @@ for _, match in df_2025.iterrows():
     else:
         points[home] = home_points + 1
         points[away] = away_points + 1
+def m1_probabilities(points_diff):
+    home_score = np.exp(points_diff / 10)
+    away_score = np.exp(-points_diff / 10)
+    draw_score = 1.0
 
+    total = home_score + draw_score + away_score
+
+    return pd.Series({
+        "Prob_H": home_score / total,
+        "Prob_D": draw_score / total,
+        "Prob_A": away_score / total
+    })
 m1 = pd.DataFrame(m1_rows)
 m1["Result"] = [
     "H" if hg > ag else "A" if hg < ag else "D"
