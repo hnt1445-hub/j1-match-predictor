@@ -64,7 +64,9 @@ for _, match in df_2025.iterrows():
         "Away": away,
         "HomePointsBefore": home_points,
         "AwayPointsBefore": away_points,
-        "PointsDiff": home_points - away_points
+        "PointsDiff": home_points - away_points,
+        "HomeForm5": home_form,
+        "AwayForm5": away_form
     })
 
     # この試合終了後の勝点を更新
