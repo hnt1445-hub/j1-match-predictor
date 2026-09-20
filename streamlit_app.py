@@ -2106,6 +2106,63 @@ def form_text(team):
 
 
 # =========================================================
+# 直接対決（表示用。モデルには影響しない）
+# =========================================================
+
+def head_to_head(team_a, team_b, completed, n=5):
+    if completed is None or len(completed) == 0:
+        return pd.DataFrame(), 0, 0, 0
+
+    games = completed[
+        (
+            (completed["Home"] == team_a)
+            & (completed["Away"] == team_b)
+        )
+        | (
+            (completed["Home"] == team_b)
+            & (completed["Away"] == team_a)
+        )
+    ].sort_values("Date", ascending=False).head(n).copy()
+
+    team_a_wins = 0
+    team_b_wins = 0
+    draws = 0
+
+    for _, game in games.iterrows():
+        hg = int(game["HG"])
+        ag = int(game["AG"])
+
+        if hg == ag:
+            draws += 1
+        else:
+            winner = game["Home"] if hg > ag else game["Away"]
+            if winner == team_a:
+                team_a_wins += 1
+            elif winner == team_b:
+                team_b_wins += 1
+
+    return games, team_a_wins, draws, team_b_wins
+
+
+def h2h_history_table(games):
+    if games is None or len(games) == 0:
+        return pd.DataFrame()
+
+    rows = []
+    for _, game in games.iterrows():
+        date = pd.to_datetime(game["Date"], errors="coerce")
+        date_text = date.strftime("%Y-%m-%d") if pd.notna(date) else str(game["Date"])
+        rows.append({
+            "日付": date_text,
+            "ホーム": display_team(game["Home"]),
+            "スコア": f"{int(game['HG'])} - {int(game['AG'])}",
+            "アウェイ": display_team(game["Away"]),
+        })
+
+    return pd.DataFrame(rows)
+
+
+# =========================================================
 # 本命の強さ
 # =========================================================
 
@@ -2222,6 +2279,31 @@ for _, row in prediction_df.iterrows():
             f"{away_display} {away_form_pts}　　"
             "🟢勝ち / 🟡引き分け / 🔴負け"
         )
+
+        h2h_games, home_h2h_wins, h2h_draws, away_h2h_wins = head_to_head(
+            row["Home"],
+            row["Away"],
+            official_completed,
+            5,
+        )
+
+        if len(h2h_games) > 0:
+            st.markdown(
+                "**🤝 直接対決・直近"
+                f"{len(h2h_games)}回**："
+                f"{home_display} {home_h2h_wins}勝 ｜ "
+                f"引き分け {h2h_draws} ｜ "
+                f"{away_display} {away_h2h_wins}勝"
+            )
+
+            with st.expander("過去の直接対決を見る"):
+                st.dataframe(
+                    h2h_history_table(h2h_games),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+        else:
+            st.caption("🤝 直接対決：過去データなし")
 
         st.markdown(
             f"### ⭐ 本命：{top_text}  "
