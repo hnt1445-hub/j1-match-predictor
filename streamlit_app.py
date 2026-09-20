@@ -20,13 +20,13 @@ from sklearn.linear_model import PoissonRegressor
 st.set_page_config(
     page_title="J1 Matchday Predictor",
     page_icon="⚽",
-    layout="wide"
+    layout="wide",
 )
 
 st.title("⚽ J1 Matchday Predictor")
 
 st.write(
-    "Jリーグ公式データから最新結果と次節を取得し、"
+    "Jリーグ公式データから最新結果と未消化試合を取得し、"
     "G5.1で予測します。"
 )
 
@@ -46,7 +46,7 @@ JLEAGUE_URL = (
 
 
 # =========================================================
-# 公式 → モデル側 チーム名
+# Jリーグ公式 → JPN.csv チーム名
 # =========================================================
 
 TEAM_MAP = {
@@ -80,7 +80,7 @@ TEAM_MAP = {
 
 
 # =========================================================
-# 特徴量
+# モデル特徴量
 # =========================================================
 
 NUMERIC_FEATURES = [
@@ -118,7 +118,7 @@ ALL_FEATURES = (
 
 
 # =========================================================
-# JPN.csv
+# 過去データ
 # =========================================================
 
 @st.cache_data
@@ -135,17 +135,17 @@ def load_historical():
     df["Date"] = pd.to_datetime(
         df["Date"],
         dayfirst=True,
-        errors="coerce"
+        errors="coerce",
     )
 
     df["HG"] = pd.to_numeric(
         df["HG"],
-        errors="coerce"
+        errors="coerce",
     )
 
     df["AG"] = pd.to_numeric(
         df["AG"],
-        errors="coerce"
+        errors="coerce",
     )
 
     df = df.dropna(
@@ -158,16 +158,22 @@ def load_historical():
         ]
     ).copy()
 
-    result = pd.DataFrame({
+    return pd.DataFrame({
         "Date": df["Date"],
-        "Home": df["Home"].astype(str).str.strip(),
-        "Away": df["Away"].astype(str).str.strip(),
+        "Home": (
+            df["Home"]
+            .astype(str)
+            .str.strip()
+        ),
+        "Away": (
+            df["Away"]
+            .astype(str)
+            .str.strip()
+        ),
         "HG": df["HG"],
         "AG": df["AG"],
         "Source": "JPN.csv",
     })
-
-    return result
 
 
 # =========================================================
@@ -184,7 +190,7 @@ def parse_official_date(value):
     return pd.to_datetime(
         text,
         format="%y/%m/%d",
-        errors="coerce"
+        errors="coerce",
     )
 
 
@@ -207,7 +213,7 @@ def extract_round(value):
 
     match = re.search(
         r"第\s*(\d+)\s*節",
-        text
+        text,
     )
 
     if match:
@@ -305,12 +311,12 @@ def load_jleague_official():
 
     games["HG"] = pd.to_numeric(
         score_parts[0],
-        errors="coerce"
+        errors="coerce",
     )
 
     games["AG"] = pd.to_numeric(
         score_parts[1],
-        errors="coerce"
+        errors="coerce",
     )
 
     games = games.dropna(
@@ -321,7 +327,7 @@ def load_jleague_official():
 
 
 # =========================================================
-# 公式取得
+# 公式データ取得
 # =========================================================
 
 official_error = None
@@ -339,10 +345,6 @@ except Exception as e:
     official_games = pd.DataFrame()
 
 
-# =========================================================
-# 過去データ
-# =========================================================
-
 historical = load_historical()
 
 known_historical_teams = (
@@ -353,11 +355,10 @@ known_historical_teams = (
 
 
 # =========================================================
-# 公式チーム名変換チェック
+# チーム名チェック
 # =========================================================
 
 unmapped_names = []
-
 mapped_not_in_history = []
 
 if len(official_games) > 0:
@@ -457,7 +458,7 @@ else:
 
 
 # =========================================================
-# 過去＋現在を結合
+# 過去 + 公式最新結果
 # =========================================================
 
 matches = pd.concat(
@@ -465,22 +466,22 @@ matches = pd.concat(
         historical,
         current_results,
     ],
-    ignore_index=True
+    ignore_index=True,
 )
 
 matches["Date"] = pd.to_datetime(
     matches["Date"],
-    errors="coerce"
+    errors="coerce",
 )
 
 matches["HG"] = pd.to_numeric(
     matches["HG"],
-    errors="coerce"
+    errors="coerce",
 )
 
 matches["AG"] = pd.to_numeric(
     matches["AG"],
-    errors="coerce"
+    errors="coerce",
 )
 
 matches = matches.dropna(
@@ -501,7 +502,7 @@ matches = (
             "Home",
             "Away",
         ],
-        keep="last"
+        keep="last",
     )
     .sort_values(
         [
@@ -515,19 +516,19 @@ matches = (
 
 
 # =========================================================
-# 予測対象となる次の節
+# 次の未消化試合
 # =========================================================
 
 next_round = None
-
 next_games = pd.DataFrame()
 
 if len(official_games) > 0:
 
-    today = pd.Timestamp.now().normalize()
+    today = (
+        pd.Timestamp.now()
+        .normalize()
+    )
 
-    # スコアが vs で、
-    # 今日以降の試合だけ候補にする
     future_games = official_games[
         official_games[
             "Score"
@@ -547,12 +548,10 @@ if len(official_games) > 0:
 
     if len(future_games) > 0:
 
-        # 最も近い未来試合の日付
         first_future_date = (
             future_games["Date"].min()
         )
 
-        # その日に開催される節番号
         candidate_rounds = (
             future_games[
                 future_games["Date"]
@@ -569,7 +568,6 @@ if len(official_games) > 0:
                 candidate_rounds
             )
 
-            # 同じ節の今日以降の未消化試合を全部取得
             next_games = (
                 future_games[
                     future_games["Round"]
@@ -586,7 +584,6 @@ if len(official_games) > 0:
 
 
 # =========================================================
-# 公式取得に失敗した場合
 # CSVフォールバック
 # =========================================================
 
@@ -601,7 +598,7 @@ if len(next_games) == 0:
         fallback["Date"] = (
             pd.to_datetime(
                 fallback["date"],
-                errors="coerce"
+                errors="coerce",
             )
         )
 
@@ -739,11 +736,20 @@ def build_history(matches):
         )
 
         rows.append({
-            "Date": match["Date"],
-            "Home": home,
-            "Away": away,
-            "HG": int(hg),
-            "AG": int(ag),
+            "Date":
+                match["Date"],
+
+            "Home":
+                home,
+
+            "Away":
+                away,
+
+            "HG":
+                int(hg),
+
+            "AG":
+                int(ag),
 
             "Home_Elo":
                 home_elo,
@@ -767,58 +773,42 @@ def build_history(matches):
 
             "Home_Recent10_GF":
                 average(
-                    recent_gf_10[
-                        home
-                    ]
+                    recent_gf_10[home]
                 ),
 
             "Home_Recent10_GA":
                 average(
-                    recent_ga_10[
-                        home
-                    ]
+                    recent_ga_10[home]
                 ),
 
             "Away_Recent10_GF":
                 average(
-                    recent_gf_10[
-                        away
-                    ]
+                    recent_gf_10[away]
                 ),
 
             "Away_Recent10_GA":
                 average(
-                    recent_ga_10[
-                        away
-                    ]
+                    recent_ga_10[away]
                 ),
 
             "Home_Home10_GF":
                 average(
-                    home_gf_10[
-                        home
-                    ]
+                    home_gf_10[home]
                 ),
 
             "Home_Home10_GA":
                 average(
-                    home_ga_10[
-                        home
-                    ]
+                    home_ga_10[home]
                 ),
 
             "Away_Away10_GF":
                 average(
-                    away_gf_10[
-                        away
-                    ]
+                    away_gf_10[away]
                 ),
 
             "Away_Away10_GA":
                 average(
-                    away_ga_10[
-                        away
-                    ]
+                    away_ga_10[away]
                 ),
 
             "Home_AttackRating":
@@ -842,10 +832,7 @@ def build_history(matches):
                 - home_defense,
         })
 
-        # ---------------------------------------------
         # 勝点
-        # ---------------------------------------------
-
         if hg > ag:
 
             home_points = 3
@@ -876,10 +863,7 @@ def build_history(matches):
             away_points
         )
 
-        # ---------------------------------------------
         # 得失点
-        # ---------------------------------------------
-
         recent_gf_10[
             home
         ].append(hg)
@@ -912,10 +896,7 @@ def build_history(matches):
             away
         ].append(hg)
 
-        # ---------------------------------------------
         # Attack / Defense
-        # ---------------------------------------------
-
         expected_home_goals = (
             home_attack
             * away_defense
@@ -992,10 +973,7 @@ def build_history(matches):
             )
         )
 
-        # ---------------------------------------------
         # Elo
-        # ---------------------------------------------
-
         expected_home = (
             1.0
             /
@@ -1013,14 +991,14 @@ def build_history(matches):
             )
         )
 
-        away_actual = (
-            1.0
-            - home_actual
-        )
-
         expected_away = (
             1.0
             - expected_home
+        )
+
+        away_actual = (
+            1.0
+            - home_actual
         )
 
         elo[home] = (
@@ -1127,11 +1105,11 @@ def make_model():
                 "imputer",
                 SimpleImputer(
                     strategy="median"
-                )
+                ),
             ),
             (
                 "scaler",
-                StandardScaler()
+                StandardScaler(),
             ),
         ]
     )
@@ -1142,7 +1120,7 @@ def make_model():
                 "onehot",
                 OneHotEncoder(
                     handle_unknown="ignore"
-                )
+                ),
             )
         ]
     )
@@ -1211,17 +1189,17 @@ home_model, away_model = (
 
 
 # =========================================================
-# 最新状態から未来特徴量
+# 現在のチーム状態
 # =========================================================
 
 def state_average(
     dictionary,
-    team
+    team,
 ):
 
     values = dictionary.get(
         team,
-        []
+        [],
     )
 
     if len(values) == 0:
@@ -1235,7 +1213,7 @@ def state_average(
 
 def future_features(
     home,
-    away
+    away,
 ):
 
     home_elo = (
@@ -1243,7 +1221,7 @@ def future_features(
             "elo"
         ].get(
             home,
-            1500.0
+            1500.0,
         )
     )
 
@@ -1252,7 +1230,7 @@ def future_features(
             "elo"
         ].get(
             away,
-            1500.0
+            1500.0,
         )
     )
 
@@ -1261,7 +1239,7 @@ def future_features(
             "attack"
         ].get(
             home,
-            1.0
+            1.0,
         )
     )
 
@@ -1270,7 +1248,7 @@ def future_features(
             "attack"
         ].get(
             away,
-            1.0
+            1.0,
         )
     )
 
@@ -1279,7 +1257,7 @@ def future_features(
             "defense"
         ].get(
             home,
-            1.0
+            1.0,
         )
     )
 
@@ -1288,7 +1266,7 @@ def future_features(
             "defense"
         ].get(
             away,
-            1.0
+            1.0,
         )
     )
 
@@ -1297,7 +1275,7 @@ def future_features(
             "recent_points_5"
         ].get(
             home,
-            []
+            [],
         )
     )
 
@@ -1306,13 +1284,16 @@ def future_features(
             "recent_points_5"
         ].get(
             away,
-            []
+            [],
         )
     )
 
     row = {
-        "Home": home,
-        "Away": away,
+        "Home":
+            home,
+
+        "Away":
+            away,
 
         "Home_Elo":
             home_elo,
@@ -1425,12 +1406,12 @@ def future_features(
 
 
 # =========================================================
-# Poisson H/D/A
+# Poisson → H/D/A
 # =========================================================
 
 def poisson_probability(
     goals,
-    expected
+    expected,
 ):
 
     return (
@@ -1442,7 +1423,7 @@ def poisson_probability(
 
 def result_probabilities(
     home_lambda,
-    away_lambda
+    away_lambda,
 ):
 
     h = 0.0
@@ -1453,7 +1434,7 @@ def result_probabilities(
 
         ph = poisson_probability(
             hg,
-            home_lambda
+            home_lambda,
         )
 
         for ag in range(11):
@@ -1462,7 +1443,7 @@ def result_probabilities(
                 ph
                 * poisson_probability(
                     ag,
-                    away_lambda
+                    away_lambda,
                 )
             )
 
@@ -1478,7 +1459,9 @@ def result_probabilities(
 
                 a += probability
 
-    total = h + d + a
+    total = (
+        h + d + a
+    )
 
     return np.array(
         [
@@ -1491,12 +1474,12 @@ def result_probabilities(
 
 def predict_match(
     home,
-    away
+    away,
 ):
 
     x = future_features(
         home,
-        away
+        away,
     )
 
     home_lambda = float(
@@ -1519,7 +1502,7 @@ def predict_match(
         np.clip(
             home_lambda,
             0.05,
-            5.0
+            5.0,
         )
     )
 
@@ -1527,14 +1510,14 @@ def predict_match(
         np.clip(
             away_lambda,
             0.05,
-            5.0
+            5.0,
         )
     )
 
     probabilities = (
         result_probabilities(
             home_lambda,
-            away_lambda
+            away_lambda,
         )
     )
 
@@ -1557,17 +1540,17 @@ c1, c2, c3 = st.columns(3)
 
 c1.metric(
     "過去データ",
-    f"{len(historical)}試合"
+    f"{len(historical)}試合",
 )
 
 c2.metric(
     "公式追加結果",
-    f"{len(current_results)}試合"
+    f"{len(current_results)}試合",
 )
 
 c3.metric(
     "モデル学習試合",
-    f"{len(matches)}試合"
+    f"{len(matches)}試合",
 )
 
 
@@ -1589,10 +1572,6 @@ else:
     )
 
 
-# =========================================================
-# 名前変換チェック
-# =========================================================
-
 if unmapped_names:
 
     st.error(
@@ -1606,7 +1585,6 @@ if mapped_not_in_history:
     st.warning(
         "JPN.csvに同じ名前が見つからないチーム："
         + "、".join(mapped_not_in_history)
-        + "。昇格クラブまたは表記差の可能性があります。"
     )
 
 
@@ -1635,13 +1613,16 @@ if next_round is not None:
     )
 
 
-next_display = next_games[
-    [
-        "Date",
-        "Home",
-        "Away",
+next_display = (
+    next_games[
+        [
+            "Date",
+            "Home",
+            "Away",
+        ]
     ]
-].copy()
+    .copy()
+)
 
 next_display["Date"] = (
     next_display["Date"]
@@ -1653,12 +1634,12 @@ next_display["Date"] = (
 st.dataframe(
     next_display,
     hide_index=True,
-    use_container_width=True
+    use_container_width=True,
 )
 
 
 # =========================================================
-# 予測
+# 全試合予測
 # =========================================================
 
 prediction_rows = []
@@ -1677,7 +1658,7 @@ for i, game in (
         probs,
     ) = predict_match(
         home,
-        away
+        away,
     )
 
     labels = [
@@ -1693,16 +1674,35 @@ for i, game in (
     ]
 
     prediction_rows.append({
-        "No": i + 1,
-        "Date": game["Date"],
-        "Home": home,
-        "Away": away,
-        "PredHG": home_lambda,
-        "PredAG": away_lambda,
-        "H": probs[0],
-        "D": probs[1],
-        "A": probs[2],
-        "Top": top,
+        "No":
+            i + 1,
+
+        "Date":
+            game["Date"],
+
+        "Home":
+            home,
+
+        "Away":
+            away,
+
+        "PredHG":
+            home_lambda,
+
+        "PredAG":
+            away_lambda,
+
+        "H":
+            probs[0],
+
+        "D":
+            probs[1],
+
+        "A":
+            probs[2],
+
+        "Top":
+            top,
     })
 
 
@@ -1710,6 +1710,53 @@ prediction_df = pd.DataFrame(
     prediction_rows
 )
 
+
+# =========================================================
+# 試合を一意に識別するキー
+# =========================================================
+
+def fixture_key(
+    date,
+    home,
+    away,
+):
+
+    if isinstance(
+        date,
+        pd.Timestamp,
+    ):
+
+        date_text = (
+            date.strftime(
+                "%Y-%m-%d"
+            )
+        )
+
+    else:
+
+        date_text = str(date)
+
+    return (
+        f"{date_text}"
+        f"|{home}"
+        f"|{away}"
+    )
+
+
+current_fixture_keys = [
+    fixture_key(
+        row["Date"],
+        row["Home"],
+        row["Away"],
+    )
+    for _, row
+    in prediction_df.iterrows()
+]
+
+
+# =========================================================
+# 予測表示
+# =========================================================
 
 st.header(
     "🔮 G5.1 自動予測"
@@ -1749,13 +1796,26 @@ for column in [
 
 display = display.rename(
     columns={
-        "Date": "日付",
-        "PredHG": "予想HG",
-        "PredAG": "予想AG",
-        "H": "H %",
-        "D": "D %",
-        "A": "A %",
-        "Top": "本命",
+        "Date":
+            "日付",
+
+        "PredHG":
+            "予想HG",
+
+        "PredAG":
+            "予想AG",
+
+        "H":
+            "H %",
+
+        "D":
+            "D %",
+
+        "A":
+            "A %",
+
+        "Top":
+            "本命",
     }
 )
 
@@ -1763,7 +1823,7 @@ display = display.rename(
 st.dataframe(
     display,
     hide_index=True,
-    use_container_width=True
+    use_container_width=True,
 )
 
 
@@ -1776,32 +1836,29 @@ st.header(
 )
 
 
-fixture_signature = [
-    (
-        row["Home"],
-        row["Away"],
-    )
-    for _, row
-    in prediction_df.iterrows()
-]
-
-
 if st.button(
     "🎲 今回の予想を生成",
     type="primary",
     use_container_width=True,
 ):
 
-    samples = []
+    # -----------------------------------------------------
+    # 今回の重要修正
+    #
+    # listだけで保存するのではなく、
+    # 「試合キー → H/D/A」の辞書として保存する。
+    # -----------------------------------------------------
+
+    sample_map = {}
 
     for _, row in (
         prediction_df.iterrows()
     ):
 
         probabilities = np.array([
-            row["H"],
-            row["D"],
-            row["A"],
+            float(row["H"]),
+            float(row["D"]),
+            float(row["A"]),
         ])
 
         probabilities = (
@@ -1809,53 +1866,72 @@ if st.button(
             / probabilities.sum()
         )
 
-        sample = np.random.choice(
-            [
-                "H",
-                "D",
-                "A",
-            ],
-            p=probabilities,
+        sample = str(
+            np.random.choice(
+                [
+                    "H",
+                    "D",
+                    "A",
+                ],
+                p=probabilities,
+            )
+        )
+
+        key = fixture_key(
+            row["Date"],
+            row["Home"],
+            row["Away"],
+        )
+
+        sample_map[
+            key
+        ] = sample
+
+    st.session_state[
+        "sample_map"
+    ] = sample_map
+
+
+sample_map = (
+    st.session_state.get(
+        "sample_map",
+        {},
+    )
+)
+
+
+# 現在のカードに対応する抽選が
+# 全部保存されているか確認
+has_current_samples = all(
+    key in sample_map
+    for key in current_fixture_keys
+)
+
+
+if has_current_samples:
+
+    final_rows = []
+    samples = []
+
+    for _, row in (
+        prediction_df.iterrows()
+    ):
+
+        key = fixture_key(
+            row["Date"],
+            row["Home"],
+            row["Away"],
+        )
+
+        sample = (
+            sample_map[
+                key
+            ]
         )
 
         samples.append(
             sample
         )
-
-    st.session_state[
-        "auto_samples"
-    ] = samples
-
-    st.session_state[
-        "auto_signature"
-    ] = fixture_signature
-
-
-if (
-    st.session_state.get(
-        "auto_signature"
-    )
-    == fixture_signature
-    and
-    "auto_samples"
-    in st.session_state
-):
-
-    samples = (
-        st.session_state[
-            "auto_samples"
-        ]
-    )
-
-    final_rows = []
-
-    for (
-        (_, row),
-        sample,
-    ) in zip(
-        prediction_df.iterrows(),
-        samples,
-    ):
 
         if sample == "H":
 
@@ -1890,21 +1966,21 @@ if (
                 round(
                     row["H"]
                     * 100,
-                    1
+                    1,
                 ),
 
             "D %":
                 round(
                     row["D"]
                     * 100,
-                    1
+                    1,
                 ),
 
             "A %":
                 round(
                     row["A"]
                     * 100,
-                    1
+                    1,
                 ),
 
             "本命":
@@ -1928,38 +2004,47 @@ if (
     st.dataframe(
         final_df,
         hide_index=True,
-        use_container_width=True
+        use_container_width=True,
     )
 
-    h_count = samples.count("H")
-    d_count = samples.count("D")
-    a_count = samples.count("A")
-
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3 = (
+        st.columns(3)
+    )
 
     c1.metric(
         "🏠 H",
-        h_count
+        samples.count("H"),
     )
 
     c2.metric(
         "🤝 D",
-        d_count
+        samples.count("D"),
     )
 
     c3.metric(
         "✈️ A",
-        a_count
+        samples.count("A"),
+    )
+
+    st.success(
+        "この抽選結果はCSV保存用にも保持されています。"
     )
 
     st.caption(
         "もう一度ボタンを押すと、"
-        "同じH/D/A確率から別の予想セットを生成します。"
+        "同じ確率から新しい予想セットを生成します。"
+    )
+
+else:
+
+    st.info(
+        "まだ今回の抽選結果はありません。"
+        "「🎲 今回の予想を生成」を押してください。"
     )
 
 
 # =========================================================
-# 詳細
+# 自動取得詳細
 # =========================================================
 
 with st.expander(
@@ -1979,7 +2064,8 @@ with st.expander(
     if next_round is not None:
 
         st.write(
-            f"予測対象：第{int(next_round)}節"
+            f"予測対象："
+            f"第{int(next_round)}節"
         )
 
     st.write(
@@ -1987,39 +2073,28 @@ with st.expander(
         f"{len(next_games)}試合"
     )
 
-    if mapped_not_in_history:
-
-        st.write(
-            "JPN.csvで完全一致しなかったチーム："
-        )
-
-        st.write(
-            mapped_not_in_history
-        )
-
 
 st.info(
     "公式サイト側で終了済み試合がまだ「vs」のままの場合、"
-    "その試合は結果として取り込まず、"
-    "過去日付なら予測対象にも入れない設計です。"
+    "過去日付なら予測対象から除外します。"
 )
+
+
 # =========================================================
-# 予測記録・実戦成績
+# ここから予測記録
 # =========================================================
 
 st.divider()
 
-st.header("📒 予測記録・実戦検証")
-
-st.write(
-    "試合前に出した予測をCSVとして保存し、"
-    "試合終了後にJリーグ公式結果と照合して成績を計算します。"
+st.header(
+    "📒 予測記録・実戦検証"
 )
 
+st.write(
+    "試合前に出した確率予測と抽選結果を保存し、"
+    "試合終了後に公式結果と照合します。"
+)
 
-# =========================================================
-# 保存済み予測を読む
-# =========================================================
 
 PREDICTION_COLUMNS = [
     "prediction_time",
@@ -2036,6 +2111,10 @@ PREDICTION_COLUMNS = [
 ]
 
 
+# =========================================================
+# 保存済み予測
+# =========================================================
+
 def load_saved_predictions():
 
     try:
@@ -2050,7 +2129,9 @@ def load_saved_predictions():
             columns=PREDICTION_COLUMNS
         )
 
-    for column in PREDICTION_COLUMNS:
+    for column in (
+        PREDICTION_COLUMNS
+    ):
 
         if column not in saved.columns:
 
@@ -2060,14 +2141,18 @@ def load_saved_predictions():
         PREDICTION_COLUMNS
     ].copy()
 
-    saved["date"] = pd.to_datetime(
-        saved["date"],
-        errors="coerce"
+    saved["date"] = (
+        pd.to_datetime(
+            saved["date"],
+            errors="coerce",
+        )
     )
 
-    saved["prediction_time"] = pd.to_datetime(
-        saved["prediction_time"],
-        errors="coerce"
+    saved["prediction_time"] = (
+        pd.to_datetime(
+            saved["prediction_time"],
+            errors="coerce",
+        )
     )
 
     for column in [
@@ -2078,9 +2163,11 @@ def load_saved_predictions():
         "p_a",
     ]:
 
-        saved[column] = pd.to_numeric(
-            saved[column],
-            errors="coerce"
+        saved[column] = (
+            pd.to_numeric(
+                saved[column],
+                errors="coerce",
+            )
         )
 
     saved["home"] = (
@@ -2095,6 +2182,21 @@ def load_saved_predictions():
         .str.strip()
     )
 
+    saved["top"] = (
+        saved["top"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
+    # NaNを文字列 "nan" にしない
+    saved["sampled"] = (
+        saved["sampled"]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+    )
+
     return saved
 
 
@@ -2104,26 +2206,23 @@ saved_predictions = (
 
 
 # =========================================================
-# 現在表示中の予測を保存用形式へ
+# 現在の予測をCSV形式にする
 # =========================================================
 
 def make_current_prediction_export():
 
     rows = []
 
-    # 抽選済みならその結果も保存
-    current_samples = st.session_state.get(
-        "auto_samples",
-        None
-    )
+    # -----------------------------------------------------
+    # session_stateのsample_mapを直接読む
+    # -----------------------------------------------------
 
-    # 現在表示している試合数と一致しない古い抽選結果は使わない
-    if (
-        current_samples is not None
-        and
-        len(current_samples) != len(prediction_df)
-    ):
-        current_samples = None
+    current_sample_map = (
+        st.session_state.get(
+            "sample_map",
+            {},
+        )
+    )
 
     prediction_time = (
         pd.Timestamp.now()
@@ -2132,25 +2231,22 @@ def make_current_prediction_export():
         )
     )
 
-    for position, (_, row) in enumerate(
+    for _, row in (
         prediction_df.iterrows()
     ):
 
-        sampled = ""
+        key = fixture_key(
+            row["Date"],
+            row["Home"],
+            row["Away"],
+        )
 
-        if (
-            current_samples is not None
-            and
-            position < len(
-                current_samples
+        sampled = (
+            current_sample_map.get(
+                key,
+                "",
             )
-        ):
-
-            sampled = (
-                current_samples[
-                    position
-                ]
-            )
+        )
 
         rows.append({
             "prediction_time":
@@ -2172,7 +2268,7 @@ def make_current_prediction_export():
                     float(
                         row["PredHG"]
                     ),
-                    4
+                    4,
                 ),
 
             "pred_ag":
@@ -2180,7 +2276,7 @@ def make_current_prediction_export():
                     float(
                         row["PredAG"]
                     ),
-                    4
+                    4,
                 ),
 
             "p_h":
@@ -2188,7 +2284,7 @@ def make_current_prediction_export():
                     float(
                         row["H"]
                     ),
-                    6
+                    6,
                 ),
 
             "p_d":
@@ -2196,7 +2292,7 @@ def make_current_prediction_export():
                     float(
                         row["D"]
                     ),
-                    6
+                    6,
                 ),
 
             "p_a":
@@ -2204,7 +2300,7 @@ def make_current_prediction_export():
                     float(
                         row["A"]
                     ),
-                    6
+                    6,
                 ),
 
             "top":
@@ -2216,7 +2312,7 @@ def make_current_prediction_export():
 
     return pd.DataFrame(
         rows,
-        columns=PREDICTION_COLUMNS
+        columns=PREDICTION_COLUMNS,
     )
 
 
@@ -2226,12 +2322,83 @@ current_export = (
 
 
 # =========================================================
-# 既存記録 + 今回予測
+# 抽選結果がCSVへ入るか画面でも確認
+# =========================================================
+
+st.subheader(
+    "🎲 CSV保存前チェック"
+)
+
+
+check_rows = []
+
+for _, row in (
+    current_export.iterrows()
+):
+
+    check_rows.append({
+        "試合":
+            (
+                f"{row['home']} "
+                f"vs "
+                f"{row['away']}"
+            ),
+
+        "本命":
+            row["top"],
+
+        "保存される抽選":
+            (
+                row["sampled"]
+                if row["sampled"]
+                else "未抽選"
+            ),
+    })
+
+
+st.dataframe(
+    pd.DataFrame(
+        check_rows
+    ),
+    hide_index=True,
+    use_container_width=True,
+)
+
+
+if (
+    len(current_export) > 0
+    and
+    current_export[
+        "sampled"
+    ].isin(
+        [
+            "H",
+            "D",
+            "A",
+        ]
+    ).all()
+):
+
+    st.success(
+        "✅ 全試合の抽選結果がCSVに保存されます。"
+    )
+
+else:
+
+    st.warning(
+        "⚠️ 抽選結果が未保存の試合があります。"
+        "上の「🎲 今回の予想を生成」を押してから"
+        "CSVをダウンロードしてください。"
+    )
+
+
+# =========================================================
+# 過去記録 + 今回
 # =========================================================
 
 def build_merged_export(
     saved,
-    current
+    current,
 ):
 
     saved_for_merge = (
@@ -2242,7 +2409,6 @@ def build_merged_export(
         current.copy()
     )
 
-    # CSV出力しやすいよう文字列化
     if len(saved_for_merge) > 0:
 
         saved_for_merge[
@@ -2272,23 +2438,16 @@ def build_merged_export(
             saved_for_merge,
             current_for_merge,
         ],
-        ignore_index=True
+        ignore_index=True,
     )
 
-    # -----------------------------------------------------
-    # 同じ試合を何度も保存した場合
-    #
-    # 最初に保存した予測を正式記録として残す。
-    # 試合結果を見てから予測を上書きすることを防ぐため。
-    # -----------------------------------------------------
-
-    combined["_prediction_sort"] = (
-        pd.to_datetime(
-            combined[
-                "prediction_time"
-            ],
-            errors="coerce"
-        )
+    combined[
+        "_prediction_sort"
+    ] = pd.to_datetime(
+        combined[
+            "prediction_time"
+        ],
+        errors="coerce",
     )
 
     combined = (
@@ -2302,7 +2461,7 @@ def build_merged_export(
                 "home",
                 "away",
             ],
-            keep="first"
+            keep="first",
         )
         .drop(
             columns=[
@@ -2317,29 +2476,99 @@ def build_merged_export(
     ]
 
 
+# =========================================================
+# 重要：
+# 既存行のsampledが空で、
+# 今回の同じ試合にsampledがある場合は補完する
+# =========================================================
+
+def merge_with_sample_fix(
+    saved,
+    current,
+):
+
+    merged = build_merged_export(
+        saved,
+        current,
+    )
+
+    # 現在の抽選結果辞書
+    current_samples = {}
+
+    for _, row in (
+        current.iterrows()
+    ):
+
+        key = (
+            str(row["date"]),
+            str(row["home"]),
+            str(row["away"]),
+        )
+
+        sample = str(
+            row["sampled"]
+        ).strip()
+
+        if sample in [
+            "H",
+            "D",
+            "A",
+        ]:
+
+            current_samples[
+                key
+            ] = sample
+
+    # 既存の最初の予測値は変えない。
+    # sampledだけ空欄なら今回の抽選で補完する。
+    for index, row in (
+        merged.iterrows()
+    ):
+
+        existing_sample = str(
+            row["sampled"]
+        ).strip()
+
+        if (
+            existing_sample == ""
+            or existing_sample.lower()
+            == "nan"
+        ):
+
+            key = (
+                str(row["date"]),
+                str(row["home"]),
+                str(row["away"]),
+            )
+
+            if key in current_samples:
+
+                merged.at[
+                    index,
+                    "sampled"
+                ] = (
+                    current_samples[
+                        key
+                    ]
+                )
+
+    return merged
+
+
 merged_export = (
-    build_merged_export(
+    merge_with_sample_fix(
         saved_predictions,
-        current_export
+        current_export,
     )
 )
 
 
 # =========================================================
-# ダウンロード
+# CSVダウンロード
 # =========================================================
 
 st.subheader(
     "💾 今回の予測を記録"
-)
-
-st.write(
-    "下のボタンからCSVを保存できます。"
-)
-
-st.info(
-    "重要：同じ試合を何度予測しても、"
-    "実戦検証では最初に保存した予測を正式記録として残します。"
 )
 
 
@@ -2355,7 +2584,9 @@ csv_bytes = (
 
 
 st.download_button(
-    label="⬇️ predictions.csv をダウンロード",
+    label=(
+        "⬇️ predictions.csv をダウンロード"
+    ),
     data=csv_bytes,
     file_name="predictions.csv",
     mime="text/csv",
@@ -2365,24 +2596,24 @@ st.download_button(
 
 st.caption(
     "ダウンロードした predictions.csv を、"
-    "GitHub の data/predictions.csv と置き換えて Commit すると、"
-    "次回から過去の予測として読み込まれます。"
+    "GitHub の data/predictions.csv と置き換えて"
+    "Commitしてください。"
 )
 
 
 # =========================================================
-# 現在保存されている予測
+# 保存済み予測一覧
 # =========================================================
 
 st.subheader(
-    "📚 保存済み予測"
+    "📚 GitHubに保存済みの予測"
 )
 
 
 if len(saved_predictions) == 0:
 
-    st.write(
-        "まだ保存済み予測はありません。"
+    st.info(
+        "まだGitHubに保存済みの予測はありません。"
     )
 
 else:
@@ -2470,17 +2701,17 @@ else:
     st.dataframe(
         saved_display,
         hide_index=True,
-        use_container_width=True
+        use_container_width=True,
     )
 
 
 # =========================================================
-# 実際の結果を作る
+# 実際の結果
 # =========================================================
 
 def actual_result(
     hg,
-    ag
+    ag,
 ):
 
     if hg > ag:
@@ -2491,9 +2722,7 @@ def actual_result(
 
         return "A"
 
-    else:
-
-        return "D"
+    return "D"
 
 
 actual_matches = (
@@ -2515,9 +2744,9 @@ actual_matches[
     lambda row:
         actual_result(
             row["HG"],
-            row["AG"]
+            row["AG"],
         ),
-    axis=1
+    axis=1,
 )
 
 
@@ -2549,7 +2778,6 @@ if len(evaluation) > 0:
         )
     )
 
-    # 結果が出た試合だけ
     completed_predictions = (
         evaluation[
             evaluation[
@@ -2567,38 +2795,30 @@ else:
 
 
 # =========================================================
-# Log Loss
+# Log Loss / Brier
 # =========================================================
 
 def match_log_loss(row):
 
     epsilon = 1e-15
 
-    actual = row["Actual"]
+    if row["Actual"] == "H":
 
-    if actual == "H":
+        probability = row["p_h"]
 
-        probability = (
-            row["p_h"]
-        )
+    elif row["Actual"] == "D":
 
-    elif actual == "D":
-
-        probability = (
-            row["p_d"]
-        )
+        probability = row["p_d"]
 
     else:
 
-        probability = (
-            row["p_a"]
-        )
+        probability = row["p_a"]
 
     probability = float(
         np.clip(
             probability,
             epsilon,
-            1.0 - epsilon
+            1.0 - epsilon,
         )
     )
 
@@ -2606,10 +2826,6 @@ def match_log_loss(row):
         probability
     )
 
-
-# =========================================================
-# Brier Score
-# =========================================================
 
 def match_brier(row):
 
@@ -2650,7 +2866,7 @@ def match_brier(row):
 
 
 # =========================================================
-# 成績
+# 実戦成績
 # =========================================================
 
 st.header(
@@ -2661,9 +2877,7 @@ st.header(
 if len(saved_predictions) == 0:
 
     st.info(
-        "まだ予測記録がありません。"
-        "最初の predictions.csv を保存すると、"
-        "ここから実戦検証が始まります。"
+        "まだ正式な予測記録がありません。"
     )
 
 
@@ -2706,7 +2920,7 @@ else:
     ] = (
         completed_predictions.apply(
             match_log_loss,
-            axis=1
+            axis=1,
         )
     )
 
@@ -2715,7 +2929,7 @@ else:
     ] = (
         completed_predictions.apply(
             match_brier,
-            axis=1
+            axis=1,
         )
     )
 
@@ -2747,28 +2961,24 @@ else:
 
     c1.metric(
         "採点済み",
-        f"{n_completed}試合"
+        f"{n_completed}試合",
     )
 
     c2.metric(
         "本命 Accuracy",
-        f"{accuracy * 100:.1f}%"
+        f"{accuracy * 100:.1f}%",
     )
 
     c3.metric(
         "Log Loss",
-        f"{log_loss_value:.4f}"
+        f"{log_loss_value:.4f}",
     )
 
     c4.metric(
         "Brier Score",
-        f"{brier_value:.4f}"
+        f"{brier_value:.4f}",
     )
 
-
-    # =====================================================
-    # 抽選予想の的中率
-    # =====================================================
 
     sampled_completed = (
         completed_predictions[
@@ -2782,6 +2992,7 @@ else:
                 ]
             )
         ]
+        .copy()
     )
 
     if len(sampled_completed) > 0:
@@ -2797,7 +3008,7 @@ else:
             (
                 f"{sampled_accuracy * 100:.1f}% "
                 f"({len(sampled_completed)}試合)"
-            )
+            ),
         )
 
 
@@ -2881,12 +3092,12 @@ else:
             result_rows
         ),
         hide_index=True,
-        use_container_width=True
+        use_container_width=True,
     )
 
 
     # =====================================================
-    # 1試合ずつの採点
+    # 1試合ずつ
     # =====================================================
 
     st.subheader(
@@ -2946,8 +3157,7 @@ else:
     ] = (
         detail[
             "LogLoss"
-        ]
-        .round(4)
+        ].round(4)
     )
 
     detail[
@@ -2955,8 +3165,7 @@ else:
     ] = (
         detail[
             "Brier"
-        ]
-        .round(4)
+        ].round(4)
     )
 
     detail[
@@ -3022,56 +3231,41 @@ else:
     st.dataframe(
         detail,
         hide_index=True,
-        use_container_width=True
+        use_container_width=True,
     )
 
 
 # =========================================================
-# この検証の意味
+# 説明
 # =========================================================
 
 with st.expander(
-    "📖 この数字はどう見ればいい？"
+    "📖 実戦成績の見方"
 ):
 
     st.markdown(
         """
 **本命 Accuracy**
 
-H / D / A のうち、一番確率が高かった結果が
+H / D / A の中で最も高確率だった結果が
 実際に当たった割合です。
-
----
 
 **Log Loss**
 
-モデルが実際に起きた結果へ
-どれくらい適切な確率を付けていたかを測ります。
-
+実際に起きた結果へ適切な確率を付けられたかを見る指標です。
 **小さいほど良い**です。
-
-自信を持って外すと大きく悪化するので、
-確率予測を見る今回のモデルでは特に重要です。
-
----
 
 **Brier Score**
 
-H / D / A の3つの確率全体が、
-実際の結果からどれくらい離れていたかを測ります。
-
+H / D / A の確率全体の精度を見る指標です。
 これも**小さいほど良い**です。
-
----
 
 **抽選 Accuracy**
 
-確率に従ってランダム抽選した予想の的中率です。
+H / D / A確率から実際にランダム生成した予想が
+当たった割合です。
 
-これはモデルそのものの性能指標というより、
-実際に生成した予想セットの記録として見ます。
-
-モデル比較では主に
-**Log Loss / Brier Score**を使います。
+モデルそのものの比較では、
+主に **Log Loss と Brier Score** を見ます。
 """
     )
