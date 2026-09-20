@@ -2003,3 +2003,1080 @@ st.info(
     "その試合は結果として取り込まず、"
     "過去日付なら予測対象にも入れない設計です。"
 )
+# =========================================================
+# 予測記録・実戦成績
+# =========================================================
+
+st.divider()
+
+st.header("📒 予測記録・実戦検証")
+
+st.write(
+    "試合前に出した予測をCSVとして保存し、"
+    "試合終了後にJリーグ公式結果と照合して成績を計算します。"
+)
+
+
+# =========================================================
+# 保存済み予測を読む
+# =========================================================
+
+PREDICTION_COLUMNS = [
+    "prediction_time",
+    "date",
+    "home",
+    "away",
+    "pred_hg",
+    "pred_ag",
+    "p_h",
+    "p_d",
+    "p_a",
+    "top",
+    "sampled",
+]
+
+
+def load_saved_predictions():
+
+    try:
+
+        saved = pd.read_csv(
+            "data/predictions.csv"
+        )
+
+    except Exception:
+
+        saved = pd.DataFrame(
+            columns=PREDICTION_COLUMNS
+        )
+
+    for column in PREDICTION_COLUMNS:
+
+        if column not in saved.columns:
+
+            saved[column] = np.nan
+
+    saved = saved[
+        PREDICTION_COLUMNS
+    ].copy()
+
+    saved["date"] = pd.to_datetime(
+        saved["date"],
+        errors="coerce"
+    )
+
+    saved["prediction_time"] = pd.to_datetime(
+        saved["prediction_time"],
+        errors="coerce"
+    )
+
+    for column in [
+        "pred_hg",
+        "pred_ag",
+        "p_h",
+        "p_d",
+        "p_a",
+    ]:
+
+        saved[column] = pd.to_numeric(
+            saved[column],
+            errors="coerce"
+        )
+
+    saved["home"] = (
+        saved["home"]
+        .astype(str)
+        .str.strip()
+    )
+
+    saved["away"] = (
+        saved["away"]
+        .astype(str)
+        .str.strip()
+    )
+
+    return saved
+
+
+saved_predictions = (
+    load_saved_predictions()
+)
+
+
+# =========================================================
+# 現在表示中の予測を保存用形式へ
+# =========================================================
+
+def make_current_prediction_export():
+
+    rows = []
+
+    # 抽選済みならその結果も保存
+    current_samples = None
+
+    if (
+        st.session_state.get(
+            "auto_signature"
+        )
+        == fixture_signature
+        and
+        "auto_samples"
+        in st.session_state
+    ):
+
+        current_samples = (
+            st.session_state[
+                "auto_samples"
+            ]
+        )
+
+    prediction_time = (
+        pd.Timestamp.now()
+        .strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+    )
+
+    for position, (_, row) in enumerate(
+        prediction_df.iterrows()
+    ):
+
+        sampled = ""
+
+        if (
+            current_samples is not None
+            and
+            position < len(
+                current_samples
+            )
+        ):
+
+            sampled = (
+                current_samples[
+                    position
+                ]
+            )
+
+        rows.append({
+            "prediction_time":
+                prediction_time,
+
+            "date":
+                row["Date"].strftime(
+                    "%Y-%m-%d"
+                ),
+
+            "home":
+                row["Home"],
+
+            "away":
+                row["Away"],
+
+            "pred_hg":
+                round(
+                    float(
+                        row["PredHG"]
+                    ),
+                    4
+                ),
+
+            "pred_ag":
+                round(
+                    float(
+                        row["PredAG"]
+                    ),
+                    4
+                ),
+
+            "p_h":
+                round(
+                    float(
+                        row["H"]
+                    ),
+                    6
+                ),
+
+            "p_d":
+                round(
+                    float(
+                        row["D"]
+                    ),
+                    6
+                ),
+
+            "p_a":
+                round(
+                    float(
+                        row["A"]
+                    ),
+                    6
+                ),
+
+            "top":
+                row["Top"],
+
+            "sampled":
+                sampled,
+        })
+
+    return pd.DataFrame(
+        rows,
+        columns=PREDICTION_COLUMNS
+    )
+
+
+current_export = (
+    make_current_prediction_export()
+)
+
+
+# =========================================================
+# 既存記録 + 今回予測
+# =========================================================
+
+def build_merged_export(
+    saved,
+    current
+):
+
+    saved_for_merge = (
+        saved.copy()
+    )
+
+    current_for_merge = (
+        current.copy()
+    )
+
+    # CSV出力しやすいよう文字列化
+    if len(saved_for_merge) > 0:
+
+        saved_for_merge[
+            "date"
+        ] = (
+            saved_for_merge[
+                "date"
+            ]
+            .dt.strftime(
+                "%Y-%m-%d"
+            )
+        )
+
+        saved_for_merge[
+            "prediction_time"
+        ] = (
+            saved_for_merge[
+                "prediction_time"
+            ]
+            .dt.strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+        )
+
+    combined = pd.concat(
+        [
+            saved_for_merge,
+            current_for_merge,
+        ],
+        ignore_index=True
+    )
+
+    # -----------------------------------------------------
+    # 同じ試合を何度も保存した場合
+    #
+    # 最初に保存した予測を正式記録として残す。
+    # 試合結果を見てから予測を上書きすることを防ぐため。
+    # -----------------------------------------------------
+
+    combined["_prediction_sort"] = (
+        pd.to_datetime(
+            combined[
+                "prediction_time"
+            ],
+            errors="coerce"
+        )
+    )
+
+    combined = (
+        combined
+        .sort_values(
+            "_prediction_sort"
+        )
+        .drop_duplicates(
+            subset=[
+                "date",
+                "home",
+                "away",
+            ],
+            keep="first"
+        )
+        .drop(
+            columns=[
+                "_prediction_sort"
+            ]
+        )
+        .reset_index(drop=True)
+    )
+
+    return combined[
+        PREDICTION_COLUMNS
+    ]
+
+
+merged_export = (
+    build_merged_export(
+        saved_predictions,
+        current_export
+    )
+)
+
+
+# =========================================================
+# ダウンロード
+# =========================================================
+
+st.subheader(
+    "💾 今回の予測を記録"
+)
+
+st.write(
+    "下のボタンからCSVを保存できます。"
+)
+
+st.info(
+    "重要：同じ試合を何度予測しても、"
+    "実戦検証では最初に保存した予測を正式記録として残します。"
+)
+
+
+csv_bytes = (
+    merged_export
+    .to_csv(
+        index=False
+    )
+    .encode(
+        "utf-8-sig"
+    )
+)
+
+
+st.download_button(
+    label="⬇️ predictions.csv をダウンロード",
+    data=csv_bytes,
+    file_name="predictions.csv",
+    mime="text/csv",
+    use_container_width=True,
+)
+
+
+st.caption(
+    "ダウンロードした predictions.csv を、"
+    "GitHub の data/predictions.csv と置き換えて Commit すると、"
+    "次回から過去の予測として読み込まれます。"
+)
+
+
+# =========================================================
+# 現在保存されている予測
+# =========================================================
+
+st.subheader(
+    "📚 保存済み予測"
+)
+
+
+if len(saved_predictions) == 0:
+
+    st.write(
+        "まだ保存済み予測はありません。"
+    )
+
+else:
+
+    saved_display = (
+        saved_predictions.copy()
+    )
+
+    saved_display[
+        "prediction_time"
+    ] = (
+        saved_display[
+            "prediction_time"
+        ]
+        .dt.strftime(
+            "%Y-%m-%d %H:%M"
+        )
+    )
+
+    saved_display[
+        "date"
+    ] = (
+        saved_display[
+            "date"
+        ]
+        .dt.strftime(
+            "%Y-%m-%d"
+        )
+    )
+
+    for column in [
+        "p_h",
+        "p_d",
+        "p_a",
+    ]:
+
+        saved_display[
+            column
+        ] = (
+            saved_display[
+                column
+            ]
+            * 100
+        ).round(1)
+
+    saved_display = (
+        saved_display.rename(
+            columns={
+                "prediction_time":
+                    "予測日時",
+
+                "date":
+                    "試合日",
+
+                "home":
+                    "Home",
+
+                "away":
+                    "Away",
+
+                "pred_hg":
+                    "予想HG",
+
+                "pred_ag":
+                    "予想AG",
+
+                "p_h":
+                    "H %",
+
+                "p_d":
+                    "D %",
+
+                "p_a":
+                    "A %",
+
+                "top":
+                    "本命",
+
+                "sampled":
+                    "抽選",
+            }
+        )
+    )
+
+    st.dataframe(
+        saved_display,
+        hide_index=True,
+        use_container_width=True
+    )
+
+
+# =========================================================
+# 実際の結果を作る
+# =========================================================
+
+def actual_result(
+    hg,
+    ag
+):
+
+    if hg > ag:
+
+        return "H"
+
+    elif hg < ag:
+
+        return "A"
+
+    else:
+
+        return "D"
+
+
+actual_matches = (
+    matches[
+        [
+            "Date",
+            "Home",
+            "Away",
+            "HG",
+            "AG",
+        ]
+    ]
+    .copy()
+)
+
+actual_matches[
+    "Actual"
+] = actual_matches.apply(
+    lambda row:
+        actual_result(
+            row["HG"],
+            row["AG"]
+        ),
+    axis=1
+)
+
+
+# =========================================================
+# 保存予測と実結果を照合
+# =========================================================
+
+evaluation = (
+    saved_predictions.copy()
+)
+
+
+if len(evaluation) > 0:
+
+    evaluation = (
+        evaluation.merge(
+            actual_matches,
+            left_on=[
+                "date",
+                "home",
+                "away",
+            ],
+            right_on=[
+                "Date",
+                "Home",
+                "Away",
+            ],
+            how="left",
+        )
+    )
+
+    # 結果が出た試合だけ
+    completed_predictions = (
+        evaluation[
+            evaluation[
+                "Actual"
+            ].notna()
+        ]
+        .copy()
+    )
+
+else:
+
+    completed_predictions = (
+        pd.DataFrame()
+    )
+
+
+# =========================================================
+# Log Loss
+# =========================================================
+
+def match_log_loss(row):
+
+    epsilon = 1e-15
+
+    actual = row["Actual"]
+
+    if actual == "H":
+
+        probability = (
+            row["p_h"]
+        )
+
+    elif actual == "D":
+
+        probability = (
+            row["p_d"]
+        )
+
+    else:
+
+        probability = (
+            row["p_a"]
+        )
+
+    probability = float(
+        np.clip(
+            probability,
+            epsilon,
+            1.0 - epsilon
+        )
+    )
+
+    return -np.log(
+        probability
+    )
+
+
+# =========================================================
+# Brier Score
+# =========================================================
+
+def match_brier(row):
+
+    actual_h = (
+        1.0
+        if row["Actual"] == "H"
+        else 0.0
+    )
+
+    actual_d = (
+        1.0
+        if row["Actual"] == "D"
+        else 0.0
+    )
+
+    actual_a = (
+        1.0
+        if row["Actual"] == "A"
+        else 0.0
+    )
+
+    return (
+        (
+            row["p_h"]
+            - actual_h
+        ) ** 2
+        +
+        (
+            row["p_d"]
+            - actual_d
+        ) ** 2
+        +
+        (
+            row["p_a"]
+            - actual_a
+        ) ** 2
+    )
+
+
+# =========================================================
+# 成績
+# =========================================================
+
+st.header(
+    "📊 G5.1 実戦成績"
+)
+
+
+if len(saved_predictions) == 0:
+
+    st.info(
+        "まだ予測記録がありません。"
+        "最初の predictions.csv を保存すると、"
+        "ここから実戦検証が始まります。"
+    )
+
+
+elif len(completed_predictions) == 0:
+
+    st.info(
+        "保存済み予測はありますが、"
+        "まだ公式結果と一致する終了済み試合がありません。"
+    )
+
+
+else:
+
+    completed_predictions[
+        "TopCorrect"
+    ] = (
+        completed_predictions[
+            "top"
+        ]
+        ==
+        completed_predictions[
+            "Actual"
+        ]
+    )
+
+    completed_predictions[
+        "SampleCorrect"
+    ] = (
+        completed_predictions[
+            "sampled"
+        ]
+        ==
+        completed_predictions[
+            "Actual"
+        ]
+    )
+
+    completed_predictions[
+        "LogLoss"
+    ] = (
+        completed_predictions.apply(
+            match_log_loss,
+            axis=1
+        )
+    )
+
+    completed_predictions[
+        "Brier"
+    ] = (
+        completed_predictions.apply(
+            match_brier,
+            axis=1
+        )
+    )
+
+    n_completed = len(
+        completed_predictions
+    )
+
+    accuracy = (
+        completed_predictions[
+            "TopCorrect"
+        ].mean()
+    )
+
+    log_loss_value = (
+        completed_predictions[
+            "LogLoss"
+        ].mean()
+    )
+
+    brier_value = (
+        completed_predictions[
+            "Brier"
+        ].mean()
+    )
+
+    c1, c2, c3, c4 = (
+        st.columns(4)
+    )
+
+    c1.metric(
+        "採点済み",
+        f"{n_completed}試合"
+    )
+
+    c2.metric(
+        "本命 Accuracy",
+        f"{accuracy * 100:.1f}%"
+    )
+
+    c3.metric(
+        "Log Loss",
+        f"{log_loss_value:.4f}"
+    )
+
+    c4.metric(
+        "Brier Score",
+        f"{brier_value:.4f}"
+    )
+
+
+    # =====================================================
+    # 抽選予想の的中率
+    # =====================================================
+
+    sampled_completed = (
+        completed_predictions[
+            completed_predictions[
+                "sampled"
+            ].isin(
+                [
+                    "H",
+                    "D",
+                    "A",
+                ]
+            )
+        ]
+    )
+
+    if len(sampled_completed) > 0:
+
+        sampled_accuracy = (
+            sampled_completed[
+                "SampleCorrect"
+            ].mean()
+        )
+
+        st.metric(
+            "🎲 抽選予想 Accuracy",
+            (
+                f"{sampled_accuracy * 100:.1f}% "
+                f"({len(sampled_completed)}試合)"
+            )
+        )
+
+
+    # =====================================================
+    # H/D/A別
+    # =====================================================
+
+    st.subheader(
+        "H / D / A 別の成績"
+    )
+
+    result_rows = []
+
+    for result in [
+        "H",
+        "D",
+        "A",
+    ]:
+
+        actual_subset = (
+            completed_predictions[
+                completed_predictions[
+                    "Actual"
+                ]
+                == result
+            ]
+        )
+
+        actual_count = len(
+            actual_subset
+        )
+
+        if actual_count > 0:
+
+            recall = (
+                (
+                    actual_subset[
+                        "top"
+                    ]
+                    == result
+                )
+                .mean()
+            )
+
+        else:
+
+            recall = np.nan
+
+        predicted_count = int(
+            (
+                completed_predictions[
+                    "top"
+                ]
+                == result
+            ).sum()
+        )
+
+        result_rows.append({
+            "結果":
+                result,
+
+            "実際の試合数":
+                actual_count,
+
+            "本命にした回数":
+                predicted_count,
+
+            "Recall":
+                (
+                    f"{recall * 100:.1f}%"
+                    if not np.isnan(
+                        recall
+                    )
+                    else "-"
+                ),
+        })
+
+
+    st.dataframe(
+        pd.DataFrame(
+            result_rows
+        ),
+        hide_index=True,
+        use_container_width=True
+    )
+
+
+    # =====================================================
+    # 1試合ずつの採点
+    # =====================================================
+
+    st.subheader(
+        "📝 1試合ずつの採点"
+    )
+
+    detail = (
+        completed_predictions[
+            [
+                "date",
+                "home",
+                "away",
+                "p_h",
+                "p_d",
+                "p_a",
+                "top",
+                "sampled",
+                "HG",
+                "AG",
+                "Actual",
+                "TopCorrect",
+                "LogLoss",
+                "Brier",
+            ]
+        ]
+        .copy()
+    )
+
+    detail[
+        "date"
+    ] = (
+        detail[
+            "date"
+        ]
+        .dt.strftime(
+            "%Y-%m-%d"
+        )
+    )
+
+    for column in [
+        "p_h",
+        "p_d",
+        "p_a",
+    ]:
+
+        detail[
+            column
+        ] = (
+            detail[
+                column
+            ]
+            * 100
+        ).round(1)
+
+    detail[
+        "LogLoss"
+    ] = (
+        detail[
+            "LogLoss"
+        ]
+        .round(4)
+    )
+
+    detail[
+        "Brier"
+    ] = (
+        detail[
+            "Brier"
+        ]
+        .round(4)
+    )
+
+    detail[
+        "TopCorrect"
+    ] = (
+        detail[
+            "TopCorrect"
+        ]
+        .map({
+            True: "○",
+            False: "×",
+        })
+    )
+
+    detail = (
+        detail.rename(
+            columns={
+                "date":
+                    "試合日",
+
+                "home":
+                    "Home",
+
+                "away":
+                    "Away",
+
+                "p_h":
+                    "H %",
+
+                "p_d":
+                    "D %",
+
+                "p_a":
+                    "A %",
+
+                "top":
+                    "本命",
+
+                "sampled":
+                    "抽選",
+
+                "HG":
+                    "実HG",
+
+                "AG":
+                    "実AG",
+
+                "Actual":
+                    "実結果",
+
+                "TopCorrect":
+                    "本命的中",
+
+                "LogLoss":
+                    "Log Loss",
+
+                "Brier":
+                    "Brier",
+            }
+        )
+    )
+
+    st.dataframe(
+        detail,
+        hide_index=True,
+        use_container_width=True
+    )
+
+
+# =========================================================
+# この検証の意味
+# =========================================================
+
+with st.expander(
+    "📖 この数字はどう見ればいい？"
+):
+
+    st.markdown(
+        """
+**本命 Accuracy**
+
+H / D / A のうち、一番確率が高かった結果が
+実際に当たった割合です。
+
+---
+
+**Log Loss**
+
+モデルが実際に起きた結果へ
+どれくらい適切な確率を付けていたかを測ります。
+
+**小さいほど良い**です。
+
+自信を持って外すと大きく悪化するので、
+確率予測を見る今回のモデルでは特に重要です。
+
+---
+
+**Brier Score**
+
+H / D / A の3つの確率全体が、
+実際の結果からどれくらい離れていたかを測ります。
+
+これも**小さいほど良い**です。
+
+---
+
+**抽選 Accuracy**
+
+確率に従ってランダム抽選した予想の的中率です。
+
+これはモデルそのものの性能指標というより、
+実際に生成した予想セットの記録として見ます。
+
+モデル比較では主に
+**Log Loss / Brier Score**を使います。
+"""
+    )
