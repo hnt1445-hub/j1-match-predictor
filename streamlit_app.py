@@ -93,6 +93,17 @@ st.markdown(
         background: linear-gradient(90deg, rgba(255,196,46,.24), rgba(255,196,46,.06));
         border: 1px solid rgba(255,196,46,.65); color: #ffe39a; font-weight: 700;
     }
+    .favorite-status {
+        display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+        padding:12px 14px; margin-top:8px; border-radius:14px;
+        background:linear-gradient(90deg, rgba(255,196,46,.25), rgba(255,196,46,.07));
+        border:1px solid rgba(255,196,46,.72); color:#fff1bd;
+        font-size:1.02rem; font-weight:700;
+    }
+    .favorite-status span {
+        display:inline-block; padding:4px 9px; border-radius:999px;
+        background:rgba(255,255,255,.08); color:#ffe7a3; font-size:.88rem;
+    }
     .prob-chip {
         display:inline-block; padding:6px 10px; margin:3px 4px 3px 0;
         border-radius:999px; background:rgba(90,130,220,.14);
@@ -2291,32 +2302,58 @@ favorite_options = ["なし"] + sorted(
     key=lambda team: display_team(team),
 )
 
-with st.sidebar.expander("⭐ お気に入り", expanded=True):
-    current_favorite = st.session_state.get("favorite_team", "なし")
-    if current_favorite not in favorite_options:
-        current_favorite = "なし"
-    favorite_team = st.selectbox(
-        "お気に入りチーム",
-        favorite_options,
-        index=favorite_options.index(current_favorite),
-        format_func=lambda team: "なし" if team == "なし" else display_team(team),
-        key="favorite_team_select",
-    )
-    favorite_boost = st.slider(
-        "お気に入り補正（ポイント）",
-        min_value=0.0, max_value=15.0,
-        value=float(st.session_state.get("favorite_boost", 0.0)),
-        step=0.5,
-        help="お気に入り側の勝率表示に加える補正です。G5.1本体は変更しません。",
-    )
+# お気に入り設定は、ユーザーが探さなくても分かるようにメイン画面へ常設する
+current_favorite = st.session_state.get("favorite_team", "なし")
+if current_favorite not in favorite_options:
+    current_favorite = "なし"
+
+st.markdown("### ⭐ お気に入り設定")
+
+with st.container(border=True):
+    fav_c1, fav_c2 = st.columns([1.45, 1])
+
+    with fav_c1:
+        favorite_team = st.selectbox(
+            "お気に入りチームを選択",
+            favorite_options,
+            index=favorite_options.index(current_favorite),
+            format_func=lambda team: "選択しない" if team == "なし" else f"⭐ {display_team(team)}",
+            key="favorite_team_select_main",
+            help="選んだクラブの試合カードを特別表示します。",
+        )
+
+    with fav_c2:
+        favorite_boost = st.slider(
+            "お気に入り補正",
+            min_value=0.0,
+            max_value=15.0,
+            value=float(st.session_state.get("favorite_boost", 0.0)),
+            step=0.5,
+            format="+%.1f pt",
+            key="favorite_boost_main",
+            help="お気に入り側の勝率表示に加えるユーザー補正です。G5.1本体は変更しません。",
+        )
+
     favorite_sampling = st.checkbox(
-        "抽選にもお気に入り補正を使う",
+        "🎲 今回の予想抽選にもお気に入り補正を使う",
         value=bool(st.session_state.get("favorite_sampling", True)),
+        key="favorite_sampling_main",
     )
+
     st.session_state["favorite_team"] = favorite_team
     st.session_state["favorite_boost"] = favorite_boost
     st.session_state["favorite_sampling"] = favorite_sampling
-    st.caption("補正はユーザー向け表示・任意の抽選だけに使います。実戦成績は補正前G5.1で評価します。")
+
+    if favorite_team == "なし":
+        st.info("⭐ お気に入りは未設定です。上の一覧から好きなチームを選べます。")
+    else:
+        sampling_text = "抽選にも適用" if favorite_sampling and favorite_boost > 0 else "抽選には適用しない"
+        st.markdown(
+            f'<div class="favorite-status">⭐ お気に入り：<strong>{display_team(favorite_team)}</strong>'
+            f'<span>補正 +{favorite_boost:.1f}pt</span><span>{sampling_text}</span></div>',
+            unsafe_allow_html=True,
+        )
+        st.caption("お気に入り補正はユーザー向け表示と任意の抽選だけに使用します。G5.1本体・Log Loss・Brierなどの実戦評価は補正前のままです。")
 
 def favorite_adjusted_probabilities(row):
     probs = np.array([float(row["H"]), float(row["D"]), float(row["A"])], dtype=float)
