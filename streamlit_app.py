@@ -80,6 +80,69 @@ TEAM_MAP = {
 
 
 # =========================================================
+# 画面表示用チーム名（モデル内部名とは分離）
+# =========================================================
+
+DEFAULT_DISPLAY_NAMES = {
+    "Kashima Antlers": "鹿島",
+    "Mito": "水戸",
+    "Urawa Reds": "浦和",
+    "Chiba": "千葉",
+    "Kashiwa Reysol": "柏",
+    "FC Tokyo": "FC東京",
+    "Verdy": "東京V",
+    "Machida": "町田",
+    "Kawasaki Frontale": "川崎F",
+    "Yokohama F. Marinos": "横浜FM",
+    "Shimizu S-Pulse": "清水",
+    "Nagoya Grampus": "名古屋",
+    "Kyoto": "京都",
+    "Gamba Osaka": "G大阪",
+    "Cerezo Osaka": "C大阪",
+    "Vissel Kobe": "神戸",
+    "Okayama": "岡山",
+    "Sanfrecce Hiroshima": "広島",
+    "Avispa Fukuoka": "福岡",
+    "V-Varen Nagasaki": "長崎",
+}
+
+
+def load_display_name_file():
+
+    try:
+        df = pd.read_csv(
+            "data/team_display_names.csv"
+        )
+    except Exception:
+        return {}
+
+    if not {
+        "internal_name",
+        "display_name",
+    }.issubset(df.columns):
+        return {}
+
+    result = {}
+
+    for _, row in df.iterrows():
+        internal = str(
+            row["internal_name"]
+        ).strip()
+        display = str(
+            row["display_name"]
+        ).strip()
+
+        if (
+            internal
+            and display
+            and display.lower() != "nan"
+        ):
+            result[internal] = display
+
+    return result
+
+
+# =========================================================
 # モデル特徴量
 # =========================================================
 
@@ -392,6 +455,59 @@ if len(official_games) > 0:
     mapped_not_in_history = sorted(
         mapped_names
         - known_historical_teams
+    )
+
+
+# =========================================================
+# 表示名設定
+# =========================================================
+
+all_internal_teams = sorted(
+    known_historical_teams
+    | set(TEAM_MAP.values())
+)
+
+file_display_names = (
+    load_display_name_file()
+)
+
+base_display_names = {
+    team: file_display_names.get(
+        team,
+        DEFAULT_DISPLAY_NAMES.get(
+            team,
+            team,
+        ),
+    )
+    for team in all_internal_teams
+}
+
+if "team_display_names" not in st.session_state:
+    st.session_state[
+        "team_display_names"
+    ] = base_display_names.copy()
+else:
+    for team, name in base_display_names.items():
+        st.session_state[
+            "team_display_names"
+        ].setdefault(team, name)
+
+
+def display_team(team):
+
+    if pd.isna(team):
+        return "-"
+
+    team = str(team)
+
+    return st.session_state[
+        "team_display_names"
+    ].get(
+        team,
+        DEFAULT_DISPLAY_NAMES.get(
+            team,
+            team,
+        ),
     )
 
 
@@ -1529,6 +1645,215 @@ def predict_match(
 
 
 # =========================================================
+# 現在のJ1順位表を公式終了済み試合から計算
+# =========================================================
+
+def build_current_standings(completed):
+
+    teams = sorted(
+        set(completed["Home"].dropna())
+        | set(completed["Away"].dropna())
+    )
+
+    stats = {
+        team: {
+            "Team": team,
+            "P": 0,
+            "W": 0,
+            "D": 0,
+            "L": 0,
+            "GF": 0,
+            "GA": 0,
+            "Pts": 0,
+        }
+        for team in teams
+    }
+
+    for _, game in completed.iterrows():
+        home = game["Home"]
+        away = game["Away"]
+        hg = int(game["HG"])
+        ag = int(game["AG"])
+
+        if home not in stats or away not in stats:
+            continue
+
+        stats[home]["P"] += 1
+        stats[away]["P"] += 1
+        stats[home]["GF"] += hg
+        stats[home]["GA"] += ag
+        stats[away]["GF"] += ag
+        stats[away]["GA"] += hg
+
+        if hg > ag:
+            stats[home]["W"] += 1
+            stats[away]["L"] += 1
+            stats[home]["Pts"] += 3
+        elif hg < ag:
+            stats[away]["W"] += 1
+            stats[home]["L"] += 1
+            stats[away]["Pts"] += 3
+        else:
+            stats[home]["D"] += 1
+            stats[away]["D"] += 1
+            stats[home]["Pts"] += 1
+            stats[away]["Pts"] += 1
+
+    table = pd.DataFrame(
+        list(stats.values())
+    )
+
+    if len(table) == 0:
+        return table
+
+    table["GD"] = (
+        table["GF"] - table["GA"]
+    )
+
+    table = (
+        table
+        .sort_values(
+            ["Pts", "GD", "GF", "Team"],
+            ascending=[False, False, False, True],
+        )
+        .reset_index(drop=True)
+    )
+
+    table.insert(
+        0,
+        "Rank",
+        range(1, len(table) + 1),
+    )
+
+    return table
+
+
+
+current_standings = (
+    build_current_standings(
+        official_completed
+    )
+)
+
+rank_map = (
+    dict(
+        zip(
+            current_standings["Team"],
+            current_standings["Rank"],
+        )
+    )
+    if len(current_standings) > 0
+    else {}
+)
+
+points_map = (
+    dict(
+        zip(
+            current_standings["Team"],
+            current_standings["Pts"],
+        )
+    )
+    if len(current_standings) > 0
+    else {}
+)
+
+
+# =========================================================
+# 表示名設定UI
+# =========================================================
+
+with st.expander(
+    "⚙️ チーム表示名を変更する"
+):
+
+    st.write(
+        "画面に表示するクラブ名だけを変更できます。"
+        "モデル内部のチーム名・予測・保存済み記録には影響しません。"
+    )
+
+    current_season_teams = sorted(
+        set(official_games.get(
+            "Home", pd.Series(dtype=object)
+        ).dropna())
+        | set(official_games.get(
+            "Away", pd.Series(dtype=object)
+        ).dropna())
+    )
+
+    settings_teams = (
+        current_season_teams
+        if current_season_teams
+        else all_internal_teams
+    )
+
+    editor_source = pd.DataFrame({
+        "内部名": settings_teams,
+        "表示名": [
+            display_team(team)
+            for team in settings_teams
+        ],
+    })
+
+    edited_names = st.data_editor(
+        editor_source,
+        hide_index=True,
+        use_container_width=True,
+        disabled=["内部名"],
+        key="display_name_editor",
+    )
+
+    if st.button(
+        "表示名をこの画面に反映",
+        use_container_width=True,
+    ):
+        for _, row in edited_names.iterrows():
+            internal = str(
+                row["内部名"]
+            ).strip()
+            display = str(
+                row["表示名"]
+            ).strip()
+            if internal and display:
+                st.session_state[
+                    "team_display_names"
+                ][internal] = display
+
+        st.rerun()
+
+    export_names = pd.DataFrame({
+        "internal_name": all_internal_teams,
+        "display_name": [
+            st.session_state[
+                "team_display_names"
+            ].get(
+                team,
+                DEFAULT_DISPLAY_NAMES.get(
+                    team, team
+                ),
+            )
+            for team in all_internal_teams
+        ],
+    })
+
+    st.download_button(
+        "⬇️ 表示名設定CSVをダウンロード",
+        data=export_names.to_csv(
+            index=False
+        ).encode("utf-8-sig"),
+        file_name="team_display_names.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+    st.caption(
+        "次回以降も同じ表示名を使う場合は、"
+        "ダウンロードしたCSVをGitHubの "
+        "data/team_display_names.csv に置いてください。"
+        "新しいクラブも一覧に自動追加されます。"
+    )
+
+
+# =========================================================
 # データ状態
 # =========================================================
 
@@ -1589,6 +1914,59 @@ if mapped_not_in_history:
 
 
 # =========================================================
+# 現在順位
+# =========================================================
+
+st.header(
+    "📊 現在のJ1順位"
+)
+
+if len(current_standings) == 0:
+    st.info(
+        "今季の終了済み公式試合がまだないため、順位を計算できません。"
+    )
+else:
+    standings_display = (
+        current_standings.copy()
+    )
+    standings_display["Team"] = (
+        standings_display["Team"]
+        .map(display_team)
+    )
+    standings_display = standings_display.rename(
+        columns={
+            "Rank": "順位",
+            "Team": "クラブ",
+            "P": "試合",
+            "W": "勝",
+            "D": "分",
+            "L": "敗",
+            "GF": "得点",
+            "GA": "失点",
+            "GD": "得失点差",
+            "Pts": "勝点",
+        }
+    )
+
+    st.dataframe(
+        standings_display[
+            [
+                "順位", "クラブ", "試合", "勝点",
+                "勝", "分", "敗",
+                "得点", "失点", "得失点差",
+            ]
+        ],
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    st.caption(
+        "Jリーグ公式サイトから取得した今季の終了済み試合を使い、"
+        "勝点 → 得失点差 → 得点の順でアプリ内計算しています。"
+    )
+
+
+# =========================================================
 # 次節
 # =========================================================
 
@@ -1629,6 +2007,24 @@ next_display["Date"] = (
     .dt.strftime(
         "%Y-%m-%d"
     )
+)
+
+next_display["Home"] = (
+    next_display["Home"].map(
+        display_team
+    )
+)
+next_display["Away"] = (
+    next_display["Away"].map(
+        display_team
+    )
+)
+next_display = next_display.rename(
+    columns={
+        "Date": "日付",
+        "Home": "ホーム",
+        "Away": "アウェイ",
+    }
 )
 
 st.dataframe(
@@ -1815,10 +2211,35 @@ for _, row in prediction_df.iterrows():
         top_probability
     )
 
+    home_display = display_team(
+        row["Home"]
+    )
+    away_display = display_team(
+        row["Away"]
+    )
+
+    home_rank = rank_map.get(
+        row["Home"]
+    )
+    away_rank = rank_map.get(
+        row["Away"]
+    )
+
+    home_label = (
+        f"{home_display}（{home_rank}位）"
+        if home_rank is not None
+        else home_display
+    )
+    away_label = (
+        f"{away_display}（{away_rank}位）"
+        if away_rank is not None
+        else away_display
+    )
+
     top_text = {
-        "H": f"{row['Home']} 勝ち",
+        "H": f"{home_display} 勝ち",
         "D": "引き分け",
-        "A": f"{row['Away']} 勝ち",
+        "A": f"{away_display} 勝ち",
     }[row["Top"]]
 
     with st.container(border=True):
@@ -1830,7 +2251,7 @@ for _, row in prediction_df.iterrows():
         )
 
         st.subheader(
-            f"{row['Home']}  vs  {row['Away']}"
+            f"{home_label}  vs  {away_label}"
         )
 
         st.markdown(
@@ -1868,8 +2289,11 @@ for _, row in prediction_df.iterrows():
 
         st.caption(
             "予想得点："
-            f"{row['Home']} {row['PredHG']:.2f} - "
-            f"{row['PredAG']:.2f} {row['Away']}"
+            f"{home_display} {row['PredHG']:.2f} - "
+            f"{row['PredAG']:.2f} {away_display}"
+            " ｜ 勝点："
+            f"{points_map.get(row['Home'], '-')} - "
+            f"{points_map.get(row['Away'], '-')}"
         )
 
 
@@ -1888,6 +2312,13 @@ with st.expander(
             )
         ),
         axis=1,
+    )
+
+    display["Home"] = display["Home"].map(
+        display_team
+    )
+    display["Away"] = display["Away"].map(
+        display_team
     )
 
     display["Date"] = (
@@ -2034,13 +2465,13 @@ if has_current_samples:
 
         if sample == "H":
             result_text = (
-                f"{row['Home']} 勝ち"
+                f"{display_team(row['Home'])} 勝ち"
             )
         elif sample == "D":
             result_text = "引き分け"
         else:
             result_text = (
-                f"{row['Away']} 勝ち"
+                f"{display_team(row['Away'])} 勝ち"
             )
 
         top_probability = max(
@@ -2056,7 +2487,7 @@ if has_current_samples:
         with st.container(border=True):
 
             st.subheader(
-                f"{row['Home']}  vs  {row['Away']}"
+                f"{display_team(row['Home'])}  vs  {display_team(row['Away'])}"
             )
 
             st.markdown(
@@ -2087,7 +2518,7 @@ if has_current_samples:
         final_rows.append({
             "No": int(row["No"]),
             "試合": (
-                f"{row['Home']} vs {row['Away']}"
+                f"{display_team(row['Home'])} vs {display_team(row['Away'])}"
             ),
             "H %": round(
                 row["H"] * 100,
@@ -2450,9 +2881,9 @@ for _, row in (
     check_rows.append({
         "試合":
             (
-                f"{row['home']} "
+                f"{display_team(row['home'])} "
                 f"vs "
-                f"{row['away']}"
+                f"{display_team(row['away'])}"
             ),
 
         "本命":
@@ -2808,6 +3239,11 @@ else:
             }
         )
     )
+
+    if "Home" in saved_display.columns:
+        saved_display["Home"] = saved_display["Home"].map(display_team)
+    if "Away" in saved_display.columns:
+        saved_display["Away"] = saved_display["Away"].map(display_team)
 
     st.dataframe(
         saved_display,
@@ -3338,6 +3774,11 @@ else:
             }
         )
     )
+
+    if "Home" in detail.columns:
+        detail["Home"] = detail["Home"].map(display_team)
+    if "Away" in detail.columns:
+        detail["Away"] = detail["Away"].map(display_team)
 
     st.dataframe(
         detail,
