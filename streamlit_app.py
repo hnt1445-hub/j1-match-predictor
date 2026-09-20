@@ -2112,23 +2112,18 @@ def make_current_prediction_export():
     rows = []
 
     # 抽選済みならその結果も保存
-    current_samples = None
+    current_samples = st.session_state.get(
+        "auto_samples",
+        None
+    )
 
+    # 現在表示している試合数と一致しない古い抽選結果は使わない
     if (
-        st.session_state.get(
-            "auto_signature"
-        )
-        == fixture_signature
+        current_samples is not None
         and
-        "auto_samples"
-        in st.session_state
+        len(current_samples) != len(prediction_df)
     ):
-
-        current_samples = (
-            st.session_state[
-                "auto_samples"
-            ]
-        )
+        current_samples = None
 
     prediction_time = (
         pd.Timestamp.now()
