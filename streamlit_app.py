@@ -17,21 +17,21 @@ from sklearn.linear_model import PoissonRegressor
 # =========================================================
 
 st.set_page_config(
-    page_title="J1 Goal Predictor G4",
+    page_title="J1 Goal Predictor G5",
     page_icon="⚽",
     layout="wide"
 )
 
-st.title("⚽ J1 Goal Predictor - G4")
+st.title("⚽ J1 Goal Predictor - G5")
 
 st.write(
-    "G4 = G2のチーム固有Poissonモデル "
-    "+ Dixon-Coles低スコア補正"
+    "G5 = G2 + 対戦相手の強さを考慮して更新する "
+    "動的Attack / Defense Rating"
 )
 
 
 # =========================================================
-# データ読み込み
+# データ
 # =========================================================
 
 @st.cache_data
@@ -63,15 +63,13 @@ def load_data():
 
     df["OriginalOrder"] = range(len(df))
 
-    df = (
+    return (
         df
         .sort_values(
             ["Date", "OriginalOrder"]
         )
         .reset_index(drop=True)
     )
-
-    return df
 
 
 matches = load_data()
@@ -90,15 +88,23 @@ def average(values):
 
 
 # =========================================================
-# 試合前特徴量
+# 特徴量作成
 # =========================================================
 
 @st.cache_data
 def build_features(matches):
 
+    # -------------------------
+    # Elo
+    # -------------------------
+
     elo = defaultdict(
         lambda: 1500.0
     )
+
+    # -------------------------
+    # 最近の成績
+    # -------------------------
 
     recent_points_5 = defaultdict(
         lambda: deque(maxlen=5)
@@ -128,9 +134,36 @@ def build_features(matches):
         lambda: deque(maxlen=10)
     )
 
-    rows = []
+    # -------------------------
+    # G5
+    #
+    # 1.0 = リーグ平均
+    #
+    # Attack > 1
+    #   得点力が平均より高い
+    #
+    # Defense < 1
+    #   失点しにくい
+    # -------------------------
+
+    attack = defaultdict(
+        lambda: 1.0
+    )
+
+    defense = defaultdict(
+        lambda: 1.0
+    )
+
+    # Rating更新速度
+    LEARNING_RATE = 0.08
+
+    # Rating暴走防止
+    MIN_RATING = 0.50
+    MAX_RATING = 1.80
 
     K_FACTOR = 20
+
+    rows = []
 
     for _, match in matches.iterrows():
 
@@ -140,8 +173,18 @@ def build_features(matches):
         hg = float(match["HG"])
         ag = float(match["AG"])
 
+        # =============================================
+        # 試合前Rating
+        # =============================================
+
         home_elo = elo[home]
         away_elo = elo[away]
+
+        home_attack = attack[home]
+        home_defense = defense[home]
+
+        away_attack = attack[away]
+        away_defense = defense[away]
 
         home_form5 = sum(
             recent_points_5[home]
@@ -162,15 +205,24 @@ def build_features(matches):
                 "HG": int(hg),
                 "AG": int(ag),
 
+                # Elo
                 "Home_Elo": home_elo,
                 "Away_Elo": away_elo,
-                "EloDiff": home_elo - away_elo,
+                "EloDiff":
+                    home_elo - away_elo,
 
-                "Home_Form5": home_form5,
-                "Away_Form5": away_form5,
+                # Form
+                "Home_Form5":
+                    home_form5,
+
+                "Away_Form5":
+                    away_form5,
+
                 "FormDiff":
-                    home_form5 - away_form5,
+                    home_form5
+                    - away_form5,
 
+                # 最近10試合
                 "Home_Recent10_GF":
                     average(
                         recent_gf_10[home]
@@ -191,6 +243,7 @@ def build_features(matches):
                         recent_ga_10[away]
                     ),
 
+                # Home / Away別
                 "Home_Home10_GF":
                     average(
                         home_gf_10[home]
@@ -209,13 +262,41 @@ def build_features(matches):
                 "Away_Away10_GA":
                     average(
                         away_ga_10[away]
-                    )
+                    ),
+
+                # G5
+                "Home_AttackRating":
+                    home_attack,
+
+                "Home_DefenseRating":
+                    home_defense,
+
+                "Away_AttackRating":
+                    away_attack,
+
+                "Away_DefenseRating":
+                    away_defense,
+
+                "AttackAdvantage":
+                    home_attack
+                    - away_attack,
+
+                "DefenseAdvantage":
+                    away_defense
+                    - home_defense
             }
         )
 
-        # ================================================
+        # =============================================
         # 試合後更新
-        # ================================================
+        #
+        # ここより上だけが予測に使われるので、
+        # 当該試合の結果漏洩はありません。
+        # =============================================
+
+        # ---------------------------------------------
+        # 勝点
+        # ---------------------------------------------
 
         if hg > ag:
 
@@ -242,6 +323,10 @@ def build_features(matches):
         recent_points_5[
             away
         ].append(ap)
+
+        # ---------------------------------------------
+        # 得失点履歴
+        # ---------------------------------------------
 
         recent_gf_10[
             home
@@ -275,13 +360,139 @@ def build_features(matches):
             away
         ].append(hg)
 
+        # =============================================
+        # G5 Attack / Defense Rating更新
+        #
+        # 予想得点の基準：
+        #
+        # Home expected
+        # = Home Attack × Away Defense
+        #
+        # Away expected
+        # = Away Attack × Home Defense
+        #
+        # Defenseが大きいほど失点しやすい
+        # =============================================
+
+        expected_home_goals = (
+            home_attack
+            *
+            away_defense
+        )
+
+        expected_away_goals = (
+            away_attack
+            *
+            home_defense
+        )
+
+        # ---------------------------------------------
+        # 実際 / 期待 の比率
+        #
+        # 0点でも極端にならないよう +0.5
+        # ---------------------------------------------
+
+        home_ratio = (
+            (hg + 0.5)
+            /
+            (expected_home_goals + 0.5)
+        )
+
+        away_ratio = (
+            (ag + 0.5)
+            /
+            (expected_away_goals + 0.5)
+        )
+
+        # ---------------------------------------------
+        # Attack更新
+        # ---------------------------------------------
+
+        new_home_attack = (
+            home_attack
+            *
+            (
+                home_ratio
+                **
+                LEARNING_RATE
+            )
+        )
+
+        new_away_attack = (
+            away_attack
+            *
+            (
+                away_ratio
+                **
+                LEARNING_RATE
+            )
+        )
+
+        # ---------------------------------------------
+        # Defense更新
+        #
+        # 相手に予想以上に点を取られた
+        # → Defense値が上昇
+        # → 守備が弱い方向
+        # ---------------------------------------------
+
+        new_home_defense = (
+            home_defense
+            *
+            (
+                away_ratio
+                **
+                LEARNING_RATE
+            )
+        )
+
+        new_away_defense = (
+            away_defense
+            *
+            (
+                home_ratio
+                **
+                LEARNING_RATE
+            )
+        )
+
+        attack[home] = np.clip(
+            new_home_attack,
+            MIN_RATING,
+            MAX_RATING
+        )
+
+        attack[away] = np.clip(
+            new_away_attack,
+            MIN_RATING,
+            MAX_RATING
+        )
+
+        defense[home] = np.clip(
+            new_home_defense,
+            MIN_RATING,
+            MAX_RATING
+        )
+
+        defense[away] = np.clip(
+            new_away_defense,
+            MIN_RATING,
+            MAX_RATING
+        )
+
+        # =============================================
+        # Elo更新
+        # =============================================
+
         expected_home = (
             1
             /
             (
                 1
                 +
-                10 ** (
+                10
+                **
+                (
                     (
                         away_elo
                         - home_elo
@@ -321,10 +532,10 @@ data = build_features(matches)
 
 
 # =========================================================
-# 実際の結果
+# 結果
 # =========================================================
 
-def actual_result(row):
+def get_result(row):
 
     if row["HG"] > row["AG"]:
         return "H"
@@ -336,16 +547,16 @@ def actual_result(row):
 
 
 data["Result"] = data.apply(
-    actual_result,
+    get_result,
     axis=1
 )
 
 
 # =========================================================
-# 特徴量
+# G2特徴量
 # =========================================================
 
-NUMERIC_FEATURES = [
+G2_NUMERIC = [
 
     "Home_Elo",
     "Away_Elo",
@@ -369,24 +580,39 @@ NUMERIC_FEATURES = [
 ]
 
 
-CATEGORICAL_FEATURES = [
+# =========================================================
+# G5特徴量
+# =========================================================
+
+G5_NUMERIC = (
+    G2_NUMERIC
+    +
+    [
+        "Home_AttackRating",
+        "Home_DefenseRating",
+
+        "Away_AttackRating",
+        "Away_DefenseRating",
+
+        "AttackAdvantage",
+        "DefenseAdvantage"
+    ]
+)
+
+
+CATEGORICAL = [
     "Home",
     "Away"
 ]
 
 
-ALL_FEATURES = (
-    NUMERIC_FEATURES
-    +
-    CATEGORICAL_FEATURES
-)
-
-
 # =========================================================
-# Poissonモデル
+# モデル作成
 # =========================================================
 
-def make_goal_model():
+def make_model(
+    numeric_features
+):
 
     numeric_transformer = Pipeline(
         steps=[
@@ -419,12 +645,12 @@ def make_goal_model():
             (
                 "numeric",
                 numeric_transformer,
-                NUMERIC_FEATURES
+                numeric_features
             ),
             (
                 "team",
                 categorical_transformer,
-                CATEGORICAL_FEATURES
+                CATEGORICAL
             )
         ]
     )
@@ -447,59 +673,7 @@ def make_goal_model():
 
 
 # =========================================================
-# λを予測
-# =========================================================
-
-def predict_lambdas(
-    train_df,
-    target_df
-):
-
-    home_model = make_goal_model()
-    away_model = make_goal_model()
-
-    home_model.fit(
-        train_df[ALL_FEATURES],
-        train_df["HG"]
-    )
-
-    away_model.fit(
-        train_df[ALL_FEATURES],
-        train_df["AG"]
-    )
-
-    home_lambda = (
-        home_model.predict(
-            target_df[ALL_FEATURES]
-        )
-    )
-
-    away_lambda = (
-        away_model.predict(
-            target_df[ALL_FEATURES]
-        )
-    )
-
-    home_lambda = np.clip(
-        home_lambda,
-        0.05,
-        5.0
-    )
-
-    away_lambda = np.clip(
-        away_lambda,
-        0.05,
-        5.0
-    )
-
-    return (
-        home_lambda,
-        away_lambda
-    )
-
-
-# =========================================================
-# Poisson確率
+# Poisson
 # =========================================================
 
 def poisson_probability(
@@ -516,88 +690,9 @@ def poisson_probability(
     )
 
 
-# =========================================================
-# Dixon-Coles補正
-#
-# 0-0
-# 0-1
-# 1-0
-# 1-1
-#
-# だけを補正
-# =========================================================
-
-def dc_tau(
-    home_goals,
-    away_goals,
-    home_lambda,
-    away_lambda,
-    rho
-):
-
-    if (
-        home_goals == 0
-        and away_goals == 0
-    ):
-
-        return (
-            1
-            -
-            home_lambda
-            *
-            away_lambda
-            *
-            rho
-        )
-
-    if (
-        home_goals == 0
-        and away_goals == 1
-    ):
-
-        return (
-            1
-            +
-            home_lambda
-            *
-            rho
-        )
-
-    if (
-        home_goals == 1
-        and away_goals == 0
-    ):
-
-        return (
-            1
-            +
-            away_lambda
-            *
-            rho
-        )
-
-    if (
-        home_goals == 1
-        and away_goals == 1
-    ):
-
-        return (
-            1
-            -
-            rho
-        )
-
-    return 1.0
-
-
-# =========================================================
-# H/D/A確率
-# =========================================================
-
 def match_probabilities(
     home_lambda,
     away_lambda,
-    rho=0.0,
     max_goals=10
 ):
 
@@ -605,71 +700,34 @@ def match_probabilities(
     draw = 0.0
     away_win = 0.0
 
-    score_rows = []
-
     for hg in range(
         max_goals + 1
     ):
 
-        home_p = (
-            poisson_probability(
-                hg,
-                home_lambda
-            )
+        ph = poisson_probability(
+            hg,
+            home_lambda
         )
 
         for ag in range(
             max_goals + 1
         ):
 
-            away_p = (
-                poisson_probability(
-                    ag,
-                    away_lambda
-                )
-            )
-
-            tau = dc_tau(
-                hg,
+            pa = poisson_probability(
                 ag,
-                home_lambda,
-                away_lambda,
-                rho
+                away_lambda
             )
 
-            probability = (
-                home_p
-                *
-                away_p
-                *
-                tau
-            )
-
-            # 不正な負確率を防ぐ
-            probability = max(
-                probability,
-                0.0
-            )
-
-            score_rows.append(
-                (
-                    hg,
-                    ag,
-                    probability
-                )
-            )
+            p = ph * pa
 
             if hg > ag:
-
-                home_win += probability
+                home_win += p
 
             elif hg == ag:
-
-                draw += probability
+                draw += p
 
             else:
-
-                away_win += probability
+                away_win += p
 
     total = (
         home_win
@@ -682,46 +740,92 @@ def match_probabilities(
     return (
         home_win / total,
         draw / total,
-        away_win / total,
-        score_rows
+        away_win / total
     )
 
 
 # =========================================================
-# λ → 全試合確率
+# モデル予測
 # =========================================================
 
-def make_probability_array(
-    home_lambdas,
-    away_lambdas,
-    rho
+def run_goal_model(
+    train_df,
+    test_df,
+    numeric_features
 ):
+
+    all_features = (
+        numeric_features
+        +
+        CATEGORICAL
+    )
+
+    home_model = make_model(
+        numeric_features
+    )
+
+    away_model = make_model(
+        numeric_features
+    )
+
+    home_model.fit(
+        train_df[
+            all_features
+        ],
+        train_df["HG"]
+    )
+
+    away_model.fit(
+        train_df[
+            all_features
+        ],
+        train_df["AG"]
+    )
+
+    pred_hg = home_model.predict(
+        test_df[
+            all_features
+        ]
+    )
+
+    pred_ag = away_model.predict(
+        test_df[
+            all_features
+        ]
+    )
+
+    pred_hg = np.clip(
+        pred_hg,
+        0.05,
+        5.0
+    )
+
+    pred_ag = np.clip(
+        pred_ag,
+        0.05,
+        5.0
+    )
 
     probabilities = []
 
-    for home_lambda, away_lambda in zip(
-        home_lambdas,
-        away_lambdas
+    for hg, ag in zip(
+        pred_hg,
+        pred_ag
     ):
 
-        ph, pd_, pa, _ = (
+        probabilities.append(
             match_probabilities(
-                home_lambda,
-                away_lambda,
-                rho
+                hg,
+                ag
             )
         )
 
-        probabilities.append(
-            [
-                ph,
-                pd_,
-                pa
-            ]
+    return (
+        pred_hg,
+        pred_ag,
+        np.array(
+            probabilities
         )
-
-    return np.array(
-        probabilities
     )
 
 
@@ -735,76 +839,69 @@ LABELS = np.array(
 
 
 def evaluate(
-    actual_results,
+    actual,
     probabilities
 ):
 
-    actual_results = np.array(
-        actual_results
+    actual = np.array(
+        actual
     )
 
-    predictions = LABELS[
+    prediction = LABELS[
         np.argmax(
             probabilities,
             axis=1
         )
     ]
 
-    accuracy = np.mean(
-        predictions
-        ==
-        actual_results
-    )
-
     correct = np.sum(
-        predictions
-        ==
-        actual_results
+        prediction == actual
     )
 
-    actual_indices = np.array(
+    accuracy = np.mean(
+        prediction == actual
+    )
+
+    actual_index = np.array(
         [
-            0 if result == "H"
-            else 1 if result == "D"
+            0 if x == "H"
+            else 1 if x == "D"
             else 2
-            for result
-            in actual_results
+            for x in actual
         ]
     )
 
-    true_probabilities = (
+    true_probability = (
         probabilities[
             np.arange(
-                len(probabilities)
+                len(actual)
             ),
-            actual_indices
+            actual_index
         ]
-    )
-
-    true_probabilities = np.clip(
-        true_probabilities,
-        1e-15,
-        1.0
     )
 
     log_loss = -np.mean(
         np.log(
-            true_probabilities
+            np.clip(
+                true_probability,
+                1e-15,
+                1.0
+            )
         )
     )
 
-    actual_onehot = np.zeros(
+    onehot = np.zeros(
         (
-            len(probabilities),
+            len(actual),
             3
         )
     )
 
-    actual_onehot[
+    onehot[
         np.arange(
-            len(probabilities)
+            len(actual)
         ),
-        actual_indices
+        actual_index
     ] = 1.0
 
     brier = np.mean(
@@ -812,24 +909,24 @@ def evaluate(
             (
                 probabilities
                 -
-                actual_onehot
-            ) ** 2,
+                onehot
+            )
+            ** 2,
             axis=1
         )
     )
 
     draw_mask = (
-        actual_results == "D"
+        actual == "D"
     )
 
     if draw_mask.sum() > 0:
 
         draw_recall = np.mean(
-            predictions[
+            prediction[
                 draw_mask
             ]
-            ==
-            "D"
+            == "D"
         )
 
     else:
@@ -837,120 +934,28 @@ def evaluate(
         draw_recall = np.nan
 
     return {
-        "Accuracy": accuracy,
-        "Correct": int(correct),
-        "LogLoss": log_loss,
-        "Brier": brier,
-        "DrawRecall": draw_recall
+        "Correct":
+            int(correct),
+
+        "Accuracy":
+            accuracy,
+
+        "LogLoss":
+            log_loss,
+
+        "Brier":
+            brier,
+
+        "DrawRecall":
+            draw_recall
     }
 
 
 # =========================================================
-# STEP 1
-# 2023以前 → 2024
+# 2025
 # =========================================================
 
-train_pre_2024 = (
-    data[
-        ~data["Season"].isin(
-            ["2024", "2025"]
-        )
-    ]
-    .copy()
-)
-
-
-validation_2024 = (
-    data[
-        data["Season"] == "2024"
-    ]
-    .copy()
-    .reset_index(drop=True)
-)
-
-
-val_home_lambda, val_away_lambda = (
-    predict_lambdas(
-        train_pre_2024,
-        validation_2024
-    )
-)
-
-
-# =========================================================
-# 2024だけでρを選択
-#
-# Log Loss最小を採用
-# =========================================================
-
-rho_candidates = np.round(
-    np.arange(
-        -0.20,
-        0.201,
-        0.01
-    ),
-    2
-)
-
-
-rho_results = []
-
-
-for rho in rho_candidates:
-
-    probs = make_probability_array(
-        val_home_lambda,
-        val_away_lambda,
-        rho
-    )
-
-    metrics = evaluate(
-        validation_2024[
-            "Result"
-        ],
-        probs
-    )
-
-    rho_results.append(
-        {
-            "rho": rho,
-            "Accuracy":
-                metrics["Accuracy"],
-
-            "LogLoss":
-                metrics["LogLoss"],
-
-            "Brier":
-                metrics["Brier"]
-        }
-    )
-
-
-rho_table = pd.DataFrame(
-    rho_results
-)
-
-
-best_row = (
-    rho_table
-    .sort_values(
-        "LogLoss"
-    )
-    .iloc[0]
-)
-
-
-BEST_RHO = float(
-    best_row["rho"]
-)
-
-
-# =========================================================
-# STEP 2
-# 2024以前全部 → 2025
-# =========================================================
-
-train_pre_2025 = (
+train = (
     data[
         data["Season"]
         != "2025"
@@ -959,7 +964,7 @@ train_pre_2025 = (
 )
 
 
-test_2025 = (
+test = (
     data[
         data["Season"]
         == "2025"
@@ -969,174 +974,75 @@ test_2025 = (
 )
 
 
-home_lambda_2025, away_lambda_2025 = (
-    predict_lambdas(
-        train_pre_2025,
-        test_2025
+# =========================================================
+# G2を同条件で再計算
+# =========================================================
+
+g2_hg, g2_ag, g2_probs = (
+    run_goal_model(
+        train,
+        test,
+        G2_NUMERIC
     )
 )
 
 
 # =========================================================
-# G2
-# rho = 0
+# G5
 # =========================================================
 
-g2_probs = make_probability_array(
-    home_lambda_2025,
-    away_lambda_2025,
-    0.0
-)
-
-
-# =========================================================
-# G4
-# 2024で選んだrho
-# =========================================================
-
-g4_probs = make_probability_array(
-    home_lambda_2025,
-    away_lambda_2025,
-    BEST_RHO
+g5_hg, g5_ag, g5_probs = (
+    run_goal_model(
+        train,
+        test,
+        G5_NUMERIC
+    )
 )
 
 
 g2_metrics = evaluate(
-    test_2025["Result"],
+    test["Result"],
     g2_probs
 )
 
 
-g4_metrics = evaluate(
-    test_2025["Result"],
-    g4_probs
+g5_metrics = evaluate(
+    test["Result"],
+    g5_probs
 )
 
 
 # =========================================================
-# DataFrame保存
+# 保存
 # =========================================================
 
-test_2025[
-    "Pred_HG"
-] = home_lambda_2025
+test["G2_H"] = g2_probs[:, 0]
+test["G2_D"] = g2_probs[:, 1]
+test["G2_A"] = g2_probs[:, 2]
 
-test_2025[
-    "Pred_AG"
-] = away_lambda_2025
+test["G5_H"] = g5_probs[:, 0]
+test["G5_D"] = g5_probs[:, 1]
+test["G5_A"] = g5_probs[:, 2]
 
+test["G5_HG"] = g5_hg
+test["G5_AG"] = g5_ag
 
-test_2025[
-    "G2_H"
-] = g2_probs[:, 0]
-
-test_2025[
-    "G2_D"
-] = g2_probs[:, 1]
-
-test_2025[
-    "G2_A"
-] = g2_probs[:, 2]
-
-
-test_2025[
-    "Prob_H"
-] = g4_probs[:, 0]
-
-test_2025[
-    "Prob_D"
-] = g4_probs[:, 1]
-
-test_2025[
-    "Prob_A"
-] = g4_probs[:, 2]
-
-
-test_2025[
-    "Prediction"
-] = LABELS[
-    np.argmax(
-        g4_probs,
-        axis=1
-    )
-]
+test["G5_Prediction"] = (
+    LABELS[
+        np.argmax(
+            g5_probs,
+            axis=1
+        )
+    ]
+)
 
 
 # =========================================================
-# 画面
+# メイン
 # =========================================================
 
 st.header(
-    "🔧 2024年で選んだDixon-Coles補正"
-)
-
-
-st.metric(
-    "採用ρ（rho）",
-    f"{BEST_RHO:.2f}"
-)
-
-
-st.caption(
-    "ρは2024年のLog Lossが最小になる値を採用。"
-    "2025年の結果はρ選択に使用していません。"
-)
-
-
-# 上位候補も確認
-best_rhos = (
-    rho_table
-    .sort_values(
-        "LogLoss"
-    )
-    .head(10)
-    .copy()
-)
-
-
-best_rhos[
-    "Accuracy"
-] = (
-    best_rhos[
-        "Accuracy"
-    ]
-    * 100
-).round(1)
-
-
-best_rhos[
-    "LogLoss"
-] = (
-    best_rhos[
-        "LogLoss"
-    ]
-    .round(4)
-)
-
-
-best_rhos[
-    "Brier"
-] = (
-    best_rhos[
-        "Brier"
-    ]
-    .round(4)
-)
-
-
-st.dataframe(
-    best_rhos,
-    hide_index=True,
-    use_container_width=True
-)
-
-
-# =========================================================
-# 2025 G4
-# =========================================================
-
-st.header(
-    "🏆 G4：2025年 全380試合"
+    "🏆 G5：2025年 全380試合"
 )
 
 
@@ -1145,42 +1051,39 @@ c1, c2, c3, c4 = st.columns(4)
 
 c1.metric(
     "正解率",
-    f"{g4_metrics['Accuracy']:.1%}"
+    f"{g5_metrics['Accuracy']:.1%}"
 )
-
 
 c2.metric(
     "Log Loss",
-    f"{g4_metrics['LogLoss']:.4f}"
+    f"{g5_metrics['LogLoss']:.4f}"
 )
-
 
 c3.metric(
     "Brier Score",
-    f"{g4_metrics['Brier']:.4f}"
+    f"{g5_metrics['Brier']:.4f}"
 )
-
 
 c4.metric(
     "Draw Recall",
-    f"{g4_metrics['DrawRecall']:.1%}"
+    f"{g5_metrics['DrawRecall']:.1%}"
 )
 
 
 st.write(
     "正解数:",
-    g4_metrics["Correct"],
+    g5_metrics["Correct"],
     "/",
-    len(test_2025)
+    len(test)
 )
 
 
 # =========================================================
-# モデル比較
+# G2 vs G5
 # =========================================================
 
 st.subheader(
-    "🆚 G2 vs G4"
+    "🆚 G2 vs G5"
 )
 
 
@@ -1188,7 +1091,7 @@ comparison = pd.DataFrame(
     {
         "モデル": [
             "G2",
-            "G4"
+            "G5"
         ],
 
         "Accuracy": [
@@ -1196,7 +1099,7 @@ comparison = pd.DataFrame(
                 "Accuracy"
             ] * 100,
 
-            g4_metrics[
+            g5_metrics[
                 "Accuracy"
             ] * 100
         ],
@@ -1206,7 +1109,7 @@ comparison = pd.DataFrame(
                 "LogLoss"
             ],
 
-            g4_metrics[
+            g5_metrics[
                 "LogLoss"
             ]
         ],
@@ -1216,7 +1119,7 @@ comparison = pd.DataFrame(
                 "Brier"
             ],
 
-            g4_metrics[
+            g5_metrics[
                 "Brier"
             ]
         ],
@@ -1226,7 +1129,7 @@ comparison = pd.DataFrame(
                 "DrawRecall"
             ] * 100,
 
-            g4_metrics[
+            g5_metrics[
                 "DrawRecall"
             ] * 100
         ]
@@ -1234,43 +1137,31 @@ comparison = pd.DataFrame(
 )
 
 
-comparison[
-    "Accuracy"
-] = (
+comparison["Accuracy"] = (
     comparison[
         "Accuracy"
-    ]
-    .round(1)
+    ].round(1)
 )
 
 
-comparison[
-    "Log Loss"
-] = (
+comparison["Log Loss"] = (
     comparison[
         "Log Loss"
-    ]
-    .round(4)
+    ].round(4)
 )
 
 
-comparison[
-    "Brier"
-] = (
+comparison["Brier"] = (
     comparison[
         "Brier"
-    ]
-    .round(4)
+    ].round(4)
 )
 
 
-comparison[
-    "Draw Recall"
-] = (
+comparison["Draw Recall"] = (
     comparison[
         "Draw Recall"
-    ]
-    .round(1)
+    ].round(1)
 )
 
 
@@ -1282,33 +1173,70 @@ st.dataframe(
 
 
 # =========================================================
-# 平均確率
+# 得点平均
 # =========================================================
 
 st.subheader(
-    "🎯 実際率 vs G2 vs G4"
+    "⚽ 実得点 vs G2 vs G5"
 )
 
 
-actual_h = (
-    test_2025[
-        "Result"
-    ] == "H"
-).mean()
+goal_comparison = pd.DataFrame(
+    {
+        "項目": [
+            "Home平均得点",
+            "Away平均得点"
+        ],
+
+        "実際": [
+            test[
+                "HG"
+            ].mean(),
+
+            test[
+                "AG"
+            ].mean()
+        ],
+
+        "G2": [
+            g2_hg.mean(),
+            g2_ag.mean()
+        ],
+
+        "G5": [
+            g5_hg.mean(),
+            g5_ag.mean()
+        ]
+    }
+)
 
 
-actual_d = (
-    test_2025[
-        "Result"
-    ] == "D"
-).mean()
+for col in [
+    "実際",
+    "G2",
+    "G5"
+]:
+
+    goal_comparison[col] = (
+        goal_comparison[col]
+        .round(3)
+    )
 
 
-actual_a = (
-    test_2025[
-        "Result"
-    ] == "A"
-).mean()
+st.dataframe(
+    goal_comparison,
+    hide_index=True,
+    use_container_width=True
+)
+
+
+# =========================================================
+# 平均H/D/A
+# =========================================================
+
+st.subheader(
+    "🎯 実際率 vs G2 vs G5"
+)
 
 
 probability_comparison = pd.DataFrame(
@@ -1320,53 +1248,64 @@ probability_comparison = pd.DataFrame(
         ],
 
         "実際率": [
-            actual_h,
-            actual_d,
-            actual_a
+            (
+                test["Result"]
+                == "H"
+            ).mean(),
+
+            (
+                test["Result"]
+                == "D"
+            ).mean(),
+
+            (
+                test["Result"]
+                == "A"
+            ).mean()
         ],
 
         "G2平均確率": [
-            test_2025[
+            test[
                 "G2_H"
             ].mean(),
 
-            test_2025[
+            test[
                 "G2_D"
             ].mean(),
 
-            test_2025[
+            test[
                 "G2_A"
             ].mean()
         ],
 
-        "G4平均確率": [
-            test_2025[
-                "Prob_H"
+        "G5平均確率": [
+            test[
+                "G5_H"
             ].mean(),
 
-            test_2025[
-                "Prob_D"
+            test[
+                "G5_D"
             ].mean(),
 
-            test_2025[
-                "Prob_A"
+            test[
+                "G5_A"
             ].mean()
         ]
     }
 )
 
 
-for column in [
+for col in [
     "実際率",
     "G2平均確率",
-    "G4平均確率"
+    "G5平均確率"
 ]:
 
     probability_comparison[
-        column
+        col
     ] = (
         probability_comparison[
-            column
+            col
         ]
         * 100
     ).round(1)
@@ -1380,178 +1319,31 @@ st.dataframe(
 
 
 # =========================================================
-# Draw分析
+# G5 Rating確認
 # =========================================================
 
-st.subheader(
-    "🤝 G4 Draw分析"
+st.header(
+    "💪 G5 Attack / Defense Rating"
 )
 
 
-max_draw = (
-    test_2025[
-        "Prob_D"
-    ].max()
-)
+rating_columns = [
+    "Date",
+    "Home",
+    "Away",
 
+    "Home_AttackRating",
+    "Home_DefenseRating",
 
-draw_30 = (
-    test_2025[
-        "Prob_D"
-    ]
-    >= 0.30
-).sum()
-
-
-draw_25 = (
-    test_2025[
-        "Prob_D"
-    ]
-    >= 0.25
-).sum()
-
-
-draw_top = (
-    test_2025[
-        "Prediction"
-    ]
-    == "D"
-).sum()
-
-
-d1, d2, d3, d4 = st.columns(4)
-
-
-d1.metric(
-    "最大Draw確率",
-    f"{max_draw:.1%}"
-)
-
-
-d2.metric(
-    "Draw 30%以上",
-    f"{int(draw_30)}試合"
-)
-
-
-d3.metric(
-    "Draw 25%以上",
-    f"{int(draw_25)}試合"
-)
-
-
-d4.metric(
-    "Drawが確率1位",
-    f"{int(draw_top)}試合"
-)
-
-
-# =========================================================
-# Draw確率帯
-# =========================================================
-
-st.subheader(
-    "📏 G4 Draw確率帯"
-)
-
-
-bins = [
-    0.00,
-    0.20,
-    0.25,
-    0.30,
-    0.35,
-    0.40,
-    0.50,
-    1.01
+    "Away_AttackRating",
+    "Away_DefenseRating"
 ]
-
-
-band_labels = [
-    "0-20%",
-    "20-25%",
-    "25-30%",
-    "30-35%",
-    "35-40%",
-    "40-50%",
-    "50%+"
-]
-
-
-draw_temp = (
-    test_2025.copy()
-)
-
-
-draw_temp[
-    "Band"
-] = pd.cut(
-    draw_temp[
-        "Prob_D"
-    ],
-    bins=bins,
-    labels=band_labels,
-    right=False
-)
-
-
-draw_temp[
-    "ActualDraw"
-] = (
-    draw_temp[
-        "Result"
-    ] == "D"
-).astype(int)
-
-
-draw_table = (
-    draw_temp
-    .groupby(
-        "Band",
-        observed=True
-    )
-    .agg(
-        試合数=(
-            "ActualDraw",
-            "size"
-        ),
-
-        平均Draw予測=(
-            "Prob_D",
-            "mean"
-        ),
-
-        実際Draw率=(
-            "ActualDraw",
-            "mean"
-        )
-    )
-    .reset_index()
-)
-
-
-draw_table[
-    "平均Draw予測"
-] = (
-    draw_table[
-        "平均Draw予測"
-    ]
-    * 100
-).round(1)
-
-
-draw_table[
-    "実際Draw率"
-] = (
-    draw_table[
-        "実際Draw率"
-    ]
-    * 100
-).round(1)
 
 
 st.dataframe(
-    draw_table,
+    test[
+        rating_columns
+    ],
     hide_index=True,
     use_container_width=True
 )
@@ -1569,9 +1361,7 @@ st.header(
 match_options = {}
 
 
-for index, row in (
-    test_2025.iterrows()
-):
+for index, row in test.iterrows():
 
     label = (
         row["Date"].strftime(
@@ -1587,9 +1377,7 @@ for index, row in (
         row["Away"]
     )
 
-    match_options[
-        label
-    ] = index
+    match_options[label] = index
 
 
 selected_label = st.selectbox(
@@ -1607,11 +1395,9 @@ selected_index = (
 )
 
 
-selected = (
-    test_2025.loc[
-        selected_index
-    ]
-)
+selected = test.loc[
+    selected_index
+]
 
 
 st.subheader(
@@ -1621,13 +1407,58 @@ st.subheader(
 )
 
 
+# =========================================================
+# Rating
+# =========================================================
+
+r1, r2 = st.columns(2)
+
+
+with r1:
+
+    st.write(
+        f"### {selected['Home']}"
+    )
+
+    st.write(
+        "Attack:",
+        f"{selected['Home_AttackRating']:.3f}"
+    )
+
+    st.write(
+        "Defense:",
+        f"{selected['Home_DefenseRating']:.3f}"
+    )
+
+
+with r2:
+
+    st.write(
+        f"### {selected['Away']}"
+    )
+
+    st.write(
+        "Attack:",
+        f"{selected['Away_AttackRating']:.3f}"
+    )
+
+    st.write(
+        "Defense:",
+        f"{selected['Away_DefenseRating']:.3f}"
+    )
+
+
 st.write(
-    "予想得点：",
-    f"{selected['Pred_HG']:.2f}",
+    "G5予想得点：",
+    f"{selected['G5_HG']:.2f}",
     "-",
-    f"{selected['Pred_AG']:.2f}"
+    f"{selected['G5_AG']:.2f}"
 )
 
+
+# =========================================================
+# G2 vs G5 個別確率
+# =========================================================
 
 individual = pd.DataFrame(
     {
@@ -1638,31 +1469,15 @@ individual = pd.DataFrame(
         ],
 
         "G2": [
-            selected[
-                "G2_H"
-            ],
-
-            selected[
-                "G2_D"
-            ],
-
-            selected[
-                "G2_A"
-            ]
+            selected["G2_H"],
+            selected["G2_D"],
+            selected["G2_A"]
         ],
 
-        "G4": [
-            selected[
-                "Prob_H"
-            ],
-
-            selected[
-                "Prob_D"
-            ],
-
-            selected[
-                "Prob_A"
-            ]
+        "G5": [
+            selected["G5_H"],
+            selected["G5_D"],
+            selected["G5_A"]
         ]
     }
 )
@@ -1674,8 +1489,8 @@ individual["G2"] = (
 ).round(1)
 
 
-individual["G4"] = (
-    individual["G4"]
+individual["G5"] = (
+    individual["G5"]
     * 100
 ).round(1)
 
@@ -1688,32 +1503,26 @@ st.dataframe(
 
 
 # =========================================================
-# G4ランダム予想
+# ランダム予想
 # =========================================================
 
 sample_key = (
-    "g4_sample_"
+    "g5_sample_"
     +
     str(selected_index)
 )
 
 
 if st.button(
-    "🎲 G4確率から予想"
+    "🎲 G5確率から1回予想"
 ):
 
     sampled = np.random.choice(
         ["H", "D", "A"],
         p=[
-            selected[
-                "Prob_H"
-            ],
-            selected[
-                "Prob_D"
-            ],
-            selected[
-                "Prob_A"
-            ]
+            selected["G5_H"],
+            selected["G5_D"],
+            selected["G5_A"]
         ]
     )
 
@@ -1733,8 +1542,7 @@ if sample_key in st.session_state:
     if sampled == "H":
 
         result_text = (
-            f"🏠 "
-            f"{selected['Home']} 勝ち"
+            f"🏠 {selected['Home']} 勝ち"
         )
 
     elif sampled == "D":
@@ -1746,8 +1554,7 @@ if sample_key in st.session_state:
     else:
 
         result_text = (
-            f"✈️ "
-            f"{selected['Away']} 勝ち"
+            f"✈️ {selected['Away']} 勝ち"
         )
 
     st.success(
@@ -1755,83 +1562,6 @@ if sample_key in st.session_state:
         +
         result_text
     )
-
-
-# =========================================================
-# スコアTOP10
-# =========================================================
-
-_, _, _, score_rows = (
-    match_probabilities(
-        selected[
-            "Pred_HG"
-        ],
-
-        selected[
-            "Pred_AG"
-        ],
-
-        BEST_RHO
-    )
-)
-
-
-score_table = pd.DataFrame(
-    score_rows,
-    columns=[
-        "HG",
-        "AG",
-        "Probability"
-    ]
-)
-
-
-score_table = (
-    score_table
-    .sort_values(
-        "Probability",
-        ascending=False
-    )
-    .head(10)
-    .copy()
-)
-
-
-score_table["Score"] = (
-    score_table[
-        "HG"
-    ].astype(str)
-    +
-    " - "
-    +
-    score_table[
-        "AG"
-    ].astype(str)
-)
-
-
-score_table["確率"] = (
-    score_table[
-        "Probability"
-    ]
-    * 100
-).round(1)
-
-
-st.subheader(
-    "⚽ G4 スコア確率 TOP10"
-)
-
-
-st.dataframe(
-    score_table[
-        [
-            "Score",
-            "確率"
-        ]
-    ],
-    hide_index=True
-)
 
 
 st.write(
@@ -1845,6 +1575,6 @@ st.write(
 
 
 st.info(
-    "G4のρは2024年だけで選択しています。"
-    "2025年の結果はρの選択には使っていません。"
+    "Attack / Defense Ratingは各試合の前の値だけを"
+    "特徴量として使用し、その試合終了後に更新しています。"
 )
