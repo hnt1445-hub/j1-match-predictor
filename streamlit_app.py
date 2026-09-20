@@ -21,6 +21,7 @@ st.set_page_config(
     page_title="J1 Matchday Predictor",
     page_icon="⚽",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
 # =========================================================
@@ -127,16 +128,30 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("⚽ J1 Matchday Predictor")
-
-st.write(
-    "Jリーグ公式データから最新結果と未消化試合を取得し、"
-    "G5.1で予測します。"
+st.markdown(
+    """
+    <div style="padding:18px 20px;border:1px solid rgba(130,165,255,.22);border-radius:18px;
+                background:linear-gradient(135deg,rgba(27,43,75,.92),rgba(12,21,38,.92));margin-bottom:14px;">
+      <div style="font-size:.78rem;letter-spacing:.14em;color:#8fb3ff;font-weight:800;">J1 MATCH PREDICTOR</div>
+      <div style="font-size:clamp(1.55rem,4vw,2.35rem);font-weight:900;color:#f4f7ff;margin-top:4px;">⚽ 次節を、もっと楽しく予想。</div>
+      <div style="color:#b9c7df;margin-top:8px;line-height:1.65;">G5.1の確率予測に、順位・直近5試合・直接対決をまとめて表示します。</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
-st.caption(
-    "G5.1 / Attack・Defense Rating 学習率 = 0.06"
-)
+with st.expander("👋 はじめての方へ｜3ステップで使えます"):
+    st.markdown(
+        """
+**1. ⭐ お気に入りを選ぶ** — 好きなクラブを登録できます。  
+**2. ⚽ 対戦カードを見る** — AI確率、順位、直近5戦、直接対決を確認。  
+**3. 🎲 予想を生成する** — H / D / A確率に応じて今回の予想を抽選します。
+
+お気に入り補正は遊び方のカスタマイズです。**G5.1本来の確率と実戦成績は補正しません。**
+        """
+    )
+
+st.caption("データはJリーグ公式結果をもとに自動更新｜AI予測は試合結果を保証するものではありません")
 
 LEARNING_RATE = 0.06
 K_FACTOR = 20
@@ -1961,7 +1976,7 @@ with st.sidebar.expander(
 # データ状態（管理情報はサイドバーへ）
 # =========================================================
 
-with st.sidebar.expander("🔧 データ・取得状況"):
+with st.sidebar.expander("🔧 管理者向け｜データ・取得状況"):
     st.write(f"過去データ：{len(historical)}試合")
     st.write(f"公式追加結果：{len(current_results)}試合")
     st.write(f"モデル学習試合：{len(matches)}試合")
@@ -1989,7 +2004,7 @@ with st.sidebar.expander("🔧 データ・取得状況"):
 # =========================================================
 
 st.header(
-    "⚽ 次節予想"
+    "⚽ 次節の予想"
 )
 
 
@@ -2936,7 +2951,7 @@ else:
 # =========================================================
 
 with st.sidebar.expander(
-    "📡 自動取得の詳細"
+    "🔧 管理者向け｜自動取得の詳細"
 ):
 
     st.write(
@@ -2975,9 +2990,9 @@ st.sidebar.info(
 st.divider()
 
 # 保存やCSV操作は普段使わないため折りたたみ
-with st.expander("💾 予測の保存・管理"):
+with st.expander("🔧 管理者向け｜予測記録・CSV管理"):
     st.caption(
-        "試合前の予測を保存する時や、GitHubの保存内容を確認する時に使います。"
+        "管理者用です。通常の利用では開く必要はありません。試合前予測の保存やGitHub記録の確認に使います。"
     )
 
     PREDICTION_COLUMNS = [
@@ -4128,6 +4143,10 @@ else:
         hide_index=True,
         use_container_width=True,
     )
+
+
+st.markdown("---")
+st.caption("⚽ J1 Matchday Predictor｜G5.1の確率は参考情報です。お気に入り補正はユーザー向け表示・任意の抽選だけに適用されます。")
 
 
 # =========================================================
