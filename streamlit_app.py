@@ -2455,7 +2455,19 @@ Elo、直近成績、Attack Rating、Defense Ratingを
 H/D/A確率に従って次節全体を1回シミュレーションします。
 """
     )
+st.header("🔍 JPN.csv チーム名チェック")
 
+all_teams = sorted(
+    set(matches["Home"]) | set(matches["Away"])
+)
+
+st.write(f"登録チーム数：{len(all_teams)}")
+
+st.dataframe(
+    pd.DataFrame({"Team": all_teams}),
+    hide_index=True,
+    use_container_width=True
+)
 
 # =========================================================
 # 注意
