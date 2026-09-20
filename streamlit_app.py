@@ -2469,10 +2469,10 @@ st.dataframe(
     use_container_width=True
 )
 # =========================================================
-# Jリーグ公式データ取得テスト
+# Jリーグ公式データ 自動整理テスト
 # =========================================================
 
-st.header("🧪 Jリーグ公式データ取得テスト")
+st.header("🧪 Jリーグ公式データ 自動整理テスト")
 
 JLEAGUE_TEST_URL = (
     "https://data.j-league.or.jp/SFMS01/search"
@@ -2481,25 +2481,371 @@ JLEAGUE_TEST_URL = (
     "&competition_years=2026"
 )
 
-if st.button("公式データを取得してみる"):
+
+def clean_jleague_date(value):
+    """
+    例:
+    26/10/21(水)
+    ↓
+    2026-10-21
+    """
+
+    text = str(value).strip()
+
+    # (水) などを削除
+    text = text.split("(")[0]
+
+    parsed = pd.to_datetime(
+        text,
+        format="%y/%m/%d",
+        errors="coerce"
+    )
+
+    return parsed
+
+
+def clean_score(value):
+    """
+    全角記号などが混じった場合に備えて
+    スコア文字列を整理する
+    """
+
+    text = str(value).strip()
+
+    text = (
+        text
+        .replace("－", "-")
+        .replace("−", "-")
+        .replace("―", "-")
+        .replace("ー", "-")
+    )
+
+    return text
+
+
+if st.button(
+    "公式データを整理してみる",
+    type="primary"
+):
 
     try:
-        test_tables = pd.read_html(JLEAGUE_TEST_URL)
 
-        st.success(
-            f"取得成功！ {len(test_tables)}個の表を取得しました。"
+        # ---------------------------------------------
+        # 公式サイトから表0を取得
+        # ---------------------------------------------
+
+        test_tables = pd.read_html(
+            JLEAGUE_TEST_URL
         )
 
-        for i, table in enumerate(test_tables):
-            st.subheader(f"表 {i}")
+        official = test_tables[0].copy()
+
+        st.success(
+            f"公式データ取得成功：{len(official)}行"
+        )
+
+
+        # ---------------------------------------------
+        # 必要な列が存在するか確認
+        # ---------------------------------------------
+
+        required_columns = [
+            "試合日",
+            "ホーム",
+            "スコア",
+            "アウェイ"
+        ]
+
+        missing_columns = [
+            column
+            for column in required_columns
+            if column not in official.columns
+        ]
+
+        if missing_columns:
+
+            st.error(
+                "必要な列が見つかりません："
+                + "、".join(missing_columns)
+            )
+
+            st.stop()
+
+
+        # ---------------------------------------------
+        # 必要な列だけ残す
+        # ---------------------------------------------
+
+        games = official[
+            [
+                "試合日",
+                "ホーム",
+                "スコア",
+                "アウェイ"
+            ]
+        ].copy()
+
+
+        games["Date"] = (
+            games["試合日"]
+            .apply(clean_jleague_date)
+        )
+
+        games["Home"] = (
+            games["ホーム"]
+            .astype(str)
+            .str.strip()
+        )
+
+        games["Away"] = (
+            games["アウェイ"]
+            .astype(str)
+            .str.strip()
+        )
+
+        games["Score"] = (
+            games["スコア"]
+            .apply(clean_score)
+        )
+
+
+        # 日付が読めなかった行は除外
+        games = games.dropna(
+            subset=["Date"]
+        ).copy()
+
+
+        # ---------------------------------------------
+        # 終了済み / 未消化を判定
+        #
+        # 終了済み:
+        # 2-1
+        #
+        # 未消化:
+        # vs
+        # ---------------------------------------------
+
+        score_parts = games[
+            "Score"
+        ].str.extract(
+            r"^\s*(\d+)\s*-\s*(\d+)\s*$"
+        )
+
+
+        games["HomeGoals"] = pd.to_numeric(
+            score_parts[0],
+            errors="coerce"
+        )
+
+        games["AwayGoals"] = pd.to_numeric(
+            score_parts[1],
+            errors="coerce"
+        )
+
+
+        completed = games[
+            games["HomeGoals"].notna()
+            &
+            games["AwayGoals"].notna()
+        ].copy()
+
+
+        future = games[
+            games["Score"]
+            .str.lower()
+            .eq("vs")
+        ].copy()
+
+
+        # ---------------------------------------------
+        # 並べ替え
+        # ---------------------------------------------
+
+        completed = (
+            completed
+            .sort_values("Date")
+            .reset_index(drop=True)
+        )
+
+        future = (
+            future
+            .sort_values("Date")
+            .reset_index(drop=True)
+        )
+
+
+        # ---------------------------------------------
+        # 終了済み試合
+        # ---------------------------------------------
+
+        st.subheader("✅ 終了済み試合")
+
+        st.metric(
+            "終了済み",
+            f"{len(completed)}試合"
+        )
+
+
+        if len(completed) > 0:
+
+            completed_display = completed[
+                [
+                    "Date",
+                    "Home",
+                    "Away",
+                    "HomeGoals",
+                    "AwayGoals"
+                ]
+            ].copy()
+
+
+            completed_display["Date"] = (
+                completed_display["Date"]
+                .dt.strftime("%Y-%m-%d")
+            )
+
+
+            completed_display[
+                "HomeGoals"
+            ] = completed_display[
+                "HomeGoals"
+            ].astype(int)
+
+
+            completed_display[
+                "AwayGoals"
+            ] = completed_display[
+                "AwayGoals"
+            ].astype(int)
+
+
             st.dataframe(
-                table,
+                completed_display,
                 hide_index=True,
                 use_container_width=True
             )
 
+
+        # ---------------------------------------------
+        # 未来試合
+        # ---------------------------------------------
+
+        st.subheader("📅 未消化試合")
+
+        st.metric(
+            "未消化",
+            f"{len(future)}試合"
+        )
+
+
+        if len(future) == 0:
+
+            st.warning(
+                "未消化試合が見つかりませんでした。"
+            )
+
+        else:
+
+            # -----------------------------------------
+            # 一番近い未来の日付
+            # -----------------------------------------
+
+            next_date = future[
+                "Date"
+            ].min()
+
+
+            st.metric(
+                "次の試合日",
+                next_date.strftime(
+                    "%Y-%m-%d"
+                )
+            )
+
+
+            # -----------------------------------------
+            # その日の試合だけ取得
+            # -----------------------------------------
+
+            next_games = future[
+                future["Date"] == next_date
+            ].copy()
+
+
+            next_display = next_games[
+                [
+                    "Date",
+                    "Home",
+                    "Away"
+                ]
+            ].copy()
+
+
+            next_display["Date"] = (
+                next_display["Date"]
+                .dt.strftime("%Y-%m-%d")
+            )
+
+
+            st.write(
+                f"次の試合日には "
+                f"{len(next_games)}試合あります。"
+            )
+
+
+            st.dataframe(
+                next_display,
+                hide_index=True,
+                use_container_width=True
+            )
+
+
+        # ---------------------------------------------
+        # 判定できなかったスコア
+        # ---------------------------------------------
+
+        unknown = games[
+            (
+                games["HomeGoals"].isna()
+                |
+                games["AwayGoals"].isna()
+            )
+            &
+            (
+                ~games["Score"]
+                .str.lower()
+                .eq("vs")
+            )
+        ].copy()
+
+
+        if len(unknown) > 0:
+
+            st.warning(
+                f"スコアを自動判定できなかった行が"
+                f"{len(unknown)}件あります。"
+            )
+
+            st.dataframe(
+                unknown[
+                    [
+                        "Date",
+                        "Home",
+                        "Score",
+                        "Away"
+                    ]
+                ],
+                hide_index=True,
+                use_container_width=True
+            )
+
+
     except Exception as e:
-        st.error("取得に失敗しました。")
+
+        st.error(
+            "公式データの整理に失敗しました。"
+        )
+
         st.exception(e)
 # =========================================================
 # 注意
