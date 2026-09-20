@@ -2468,7 +2468,39 @@ st.dataframe(
     hide_index=True,
     use_container_width=True
 )
+# =========================================================
+# Jリーグ公式データ取得テスト
+# =========================================================
 
+st.header("🧪 Jリーグ公式データ取得テスト")
+
+JLEAGUE_TEST_URL = (
+    "https://data.j-league.or.jp/SFMS01/search"
+    "?competition_frame_ids=1"
+    "&competition_ids=725"
+    "&competition_years=2026"
+)
+
+if st.button("公式データを取得してみる"):
+
+    try:
+        test_tables = pd.read_html(JLEAGUE_TEST_URL)
+
+        st.success(
+            f"取得成功！ {len(test_tables)}個の表を取得しました。"
+        )
+
+        for i, table in enumerate(test_tables):
+            st.subheader(f"表 {i}")
+            st.dataframe(
+                table,
+                hide_index=True,
+                use_container_width=True
+            )
+
+    except Exception as e:
+        st.error("取得に失敗しました。")
+        st.exception(e)
 # =========================================================
 # 注意
 # =========================================================
