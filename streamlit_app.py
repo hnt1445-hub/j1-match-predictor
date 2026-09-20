@@ -17,16 +17,56 @@ from sklearn.linear_model import PoissonRegressor
 # =========================================================
 
 st.set_page_config(
-    page_title="J1 Goal Predictor G5.1",
+    page_title="J1 Future Predictor",
     page_icon="⚽",
     layout="wide"
 )
 
-st.title("⚽ J1 Goal Predictor - G5.1")
+st.title("⚽ J1 Future Match Predictor")
 
 st.write(
-    "Attack / Defense Rating の更新速度を2024年だけで選び、"
-    "その値を固定して2025年380試合を評価します。"
+    "G5.1を使って、まだ結果の出ていない試合を予測します。"
+)
+
+LEARNING_RATE = 0.06
+K_FACTOR = 20
+
+NUMERIC_FEATURES = [
+    "Home_Elo",
+    "Away_Elo",
+    "EloDiff",
+
+    "Home_Form5",
+    "Away_Form5",
+    "FormDiff",
+
+    "Home_Recent10_GF",
+    "Home_Recent10_GA",
+    "Away_Recent10_GF",
+    "Away_Recent10_GA",
+
+    "Home_Home10_GF",
+    "Home_Home10_GA",
+    "Away_Away10_GF",
+    "Away_Away10_GA",
+
+    "Home_AttackRating",
+    "Home_DefenseRating",
+    "Away_AttackRating",
+    "Away_DefenseRating",
+
+    "AttackAdvantage",
+    "DefenseAdvantage"
+]
+
+CATEGORICAL_FEATURES = [
+    "Home",
+    "Away"
+]
+
+ALL_FEATURES = (
+    NUMERIC_FEATURES
+    + CATEGORICAL_FEATURES
 )
 
 
@@ -78,7 +118,7 @@ matches = load_data()
 
 
 # =========================================================
-# 補助関数
+# 履歴平均
 # =========================================================
 
 def average(values):
@@ -90,19 +130,23 @@ def average(values):
 
 
 # =========================================================
-# 特徴量作成
-#
-# learning_rate を外から変更できるようにした
+# 過去試合から
+# 「試合前特徴量」と「最新チーム状態」を同時に作る
 # =========================================================
 
 @st.cache_data
-def build_features(
-    matches,
-    learning_rate
-):
+def build_history(matches):
 
     elo = defaultdict(
         lambda: 1500.0
+    )
+
+    attack = defaultdict(
+        lambda: 1.0
+    )
+
+    defense = defaultdict(
+        lambda: 1.0
     )
 
     recent_points_5 = defaultdict(
@@ -133,20 +177,10 @@ def build_features(
         lambda: deque(maxlen=10)
     )
 
-    attack = defaultdict(
-        lambda: 1.0
-    )
-
-    defense = defaultdict(
-        lambda: 1.0
-    )
+    rows = []
 
     MIN_RATING = 0.50
     MAX_RATING = 1.80
-
-    K_FACTOR = 20
-
-    rows = []
 
     for _, match in matches.iterrows():
 
@@ -160,18 +194,22 @@ def build_features(
         away_elo = elo[away]
 
         home_attack = attack[home]
-        home_defense = defense[home]
-
         away_attack = attack[away]
+
+        home_defense = defense[home]
         away_defense = defense[away]
 
-        home_form5 = sum(
+        home_form = sum(
             recent_points_5[home]
         )
 
-        away_form5 = sum(
+        away_form = sum(
             recent_points_5[away]
         )
+
+        # ---------------------------------------------
+        # 試合前情報を保存
+        # ---------------------------------------------
 
         rows.append(
             {
@@ -200,18 +238,16 @@ def build_features(
                     away_elo,
 
                 "EloDiff":
-                    home_elo
-                    - away_elo,
+                    home_elo - away_elo,
 
                 "Home_Form5":
-                    home_form5,
+                    home_form,
 
                 "Away_Form5":
-                    away_form5,
+                    away_form,
 
                 "FormDiff":
-                    home_form5
-                    - away_form5,
+                    home_form - away_form,
 
                 "Home_Recent10_GF":
                     average(
@@ -266,18 +302,16 @@ def build_features(
                     away_defense,
 
                 "AttackAdvantage":
-                    home_attack
-                    - away_attack,
+                    home_attack - away_attack,
 
                 "DefenseAdvantage":
-                    away_defense
-                    - home_defense
+                    away_defense - home_defense
             }
         )
 
-        # =================================================
-        # ここから試合後更新
-        # =================================================
+        # ---------------------------------------------
+        # 試合後更新
+        # ---------------------------------------------
 
         if hg > ag:
 
@@ -297,87 +331,52 @@ def build_features(
             ap = 1
             home_actual = 0.5
 
-        recent_points_5[
-            home
-        ].append(hp)
+        recent_points_5[home].append(hp)
+        recent_points_5[away].append(ap)
 
-        recent_points_5[
-            away
-        ].append(ap)
+        recent_gf_10[home].append(hg)
+        recent_ga_10[home].append(ag)
 
-        recent_gf_10[
-            home
-        ].append(hg)
+        recent_gf_10[away].append(ag)
+        recent_ga_10[away].append(hg)
 
-        recent_ga_10[
-            home
-        ].append(ag)
+        home_gf_10[home].append(hg)
+        home_ga_10[home].append(ag)
 
-        recent_gf_10[
-            away
-        ].append(ag)
+        away_gf_10[away].append(ag)
+        away_ga_10[away].append(hg)
 
-        recent_ga_10[
-            away
-        ].append(hg)
-
-        home_gf_10[
-            home
-        ].append(hg)
-
-        home_ga_10[
-            home
-        ].append(ag)
-
-        away_gf_10[
-            away
-        ].append(ag)
-
-        away_ga_10[
-            away
-        ].append(hg)
-
-        # =================================================
-        # Attack / Defense Rating更新
-        # =================================================
+        # ---------------------------------------------
+        # Attack / Defense更新
+        # ---------------------------------------------
 
         expected_home_goals = (
             home_attack
-            *
-            away_defense
+            * away_defense
         )
 
         expected_away_goals = (
             away_attack
-            *
-            home_defense
+            * home_defense
         )
 
         home_ratio = (
             (hg + 0.5)
             /
-            (
-                expected_home_goals
-                + 0.5
-            )
+            (expected_home_goals + 0.5)
         )
 
         away_ratio = (
             (ag + 0.5)
             /
-            (
-                expected_away_goals
-                + 0.5
-            )
+            (expected_away_goals + 0.5)
         )
 
         attack[home] = np.clip(
             home_attack
-            *
-            (
+            * (
                 home_ratio
-                **
-                learning_rate
+                ** LEARNING_RATE
             ),
             MIN_RATING,
             MAX_RATING
@@ -385,11 +384,9 @@ def build_features(
 
         attack[away] = np.clip(
             away_attack
-            *
-            (
+            * (
                 away_ratio
-                **
-                learning_rate
+                ** LEARNING_RATE
             ),
             MIN_RATING,
             MAX_RATING
@@ -397,11 +394,9 @@ def build_features(
 
         defense[home] = np.clip(
             home_defense
-            *
-            (
+            * (
                 away_ratio
-                **
-                learning_rate
+                ** LEARNING_RATE
             ),
             MIN_RATING,
             MAX_RATING
@@ -409,19 +404,17 @@ def build_features(
 
         defense[away] = np.clip(
             away_defense
-            *
-            (
+            * (
                 home_ratio
-                **
-                learning_rate
+                ** LEARNING_RATE
             ),
             MIN_RATING,
             MAX_RATING
         )
 
-        # =================================================
+        # ---------------------------------------------
         # Elo更新
-        # =================================================
+        # ---------------------------------------------
 
         expected_home = (
             1
@@ -430,8 +423,7 @@ def build_features(
                 1
                 +
                 10
-                **
-                (
+                ** (
                     (
                         away_elo
                         - home_elo
@@ -445,8 +437,7 @@ def build_features(
             home_elo
             +
             K_FACTOR
-            *
-            (
+            * (
                 home_actual
                 - expected_home
             )
@@ -456,86 +447,92 @@ def build_features(
             away_elo
             +
             K_FACTOR
-            *
-            (
+            * (
                 (1.0 - home_actual)
                 -
                 (1.0 - expected_home)
             )
         )
 
-    result = pd.DataFrame(rows)
+    history = pd.DataFrame(rows)
 
-    result["Result"] = np.where(
-        result["HG"] > result["AG"],
-        "H",
-        np.where(
-            result["HG"] < result["AG"],
-            "A",
-            "D"
-        )
-    )
+    # ---------------------------------------------
+    # 最終状態を普通のdictへ変換
+    # ---------------------------------------------
 
-    return result
+    state = {
+        "elo":
+            dict(elo),
+
+        "attack":
+            dict(attack),
+
+        "defense":
+            dict(defense),
+
+        "recent_points_5":
+            {
+                k: list(v)
+                for k, v
+                in recent_points_5.items()
+            },
+
+        "recent_gf_10":
+            {
+                k: list(v)
+                for k, v
+                in recent_gf_10.items()
+            },
+
+        "recent_ga_10":
+            {
+                k: list(v)
+                for k, v
+                in recent_ga_10.items()
+            },
+
+        "home_gf_10":
+            {
+                k: list(v)
+                for k, v
+                in home_gf_10.items()
+            },
+
+        "home_ga_10":
+            {
+                k: list(v)
+                for k, v
+                in home_ga_10.items()
+            },
+
+        "away_gf_10":
+            {
+                k: list(v)
+                for k, v
+                in away_gf_10.items()
+            },
+
+        "away_ga_10":
+            {
+                k: list(v)
+                for k, v
+                in away_ga_10.items()
+            }
+    }
+
+    return history, state
 
 
-# =========================================================
-# 特徴量
-# =========================================================
-
-G2_NUMERIC = [
-
-    "Home_Elo",
-    "Away_Elo",
-    "EloDiff",
-
-    "Home_Form5",
-    "Away_Form5",
-    "FormDiff",
-
-    "Home_Recent10_GF",
-    "Home_Recent10_GA",
-
-    "Away_Recent10_GF",
-    "Away_Recent10_GA",
-
-    "Home_Home10_GF",
-    "Home_Home10_GA",
-
-    "Away_Away10_GF",
-    "Away_Away10_GA"
-]
-
-
-G5_NUMERIC = (
-    G2_NUMERIC
-    +
-    [
-        "Home_AttackRating",
-        "Home_DefenseRating",
-
-        "Away_AttackRating",
-        "Away_DefenseRating",
-
-        "AttackAdvantage",
-        "DefenseAdvantage"
-    ]
+history, current_state = (
+    build_history(matches)
 )
 
 
-CATEGORICAL = [
-    "Home",
-    "Away"
-]
-
-
 # =========================================================
-# Poissonモデル
+# モデル
 # =========================================================
 
-def make_model(
-    numeric_features
-):
+def make_model():
 
     numeric_transformer = Pipeline(
         steps=[
@@ -568,12 +565,12 @@ def make_model(
             (
                 "numeric",
                 numeric_transformer,
-                numeric_features
+                NUMERIC_FEATURES
             ),
             (
                 "team",
                 categorical_transformer,
-                CATEGORICAL
+                CATEGORICAL_FEATURES
             )
         ]
     )
@@ -595,8 +592,201 @@ def make_model(
     )
 
 
+@st.cache_resource
+def train_models(history):
+
+    home_model = make_model()
+    away_model = make_model()
+
+    home_model.fit(
+        history[ALL_FEATURES],
+        history["HG"]
+    )
+
+    away_model.fit(
+        history[ALL_FEATURES],
+        history["AG"]
+    )
+
+    return home_model, away_model
+
+
+home_model, away_model = (
+    train_models(history)
+)
+
+
 # =========================================================
-# H/D/A確率
+# Future特徴量
+# =========================================================
+
+def state_average(
+    dictionary,
+    team
+):
+
+    values = dictionary.get(
+        team,
+        []
+    )
+
+    if len(values) == 0:
+        return np.nan
+
+    return np.mean(values)
+
+
+def make_future_match(
+    home,
+    away,
+    state
+):
+
+    home_elo = (
+        state["elo"]
+        .get(home, 1500.0)
+    )
+
+    away_elo = (
+        state["elo"]
+        .get(away, 1500.0)
+    )
+
+    home_attack = (
+        state["attack"]
+        .get(home, 1.0)
+    )
+
+    away_attack = (
+        state["attack"]
+        .get(away, 1.0)
+    )
+
+    home_defense = (
+        state["defense"]
+        .get(home, 1.0)
+    )
+
+    away_defense = (
+        state["defense"]
+        .get(away, 1.0)
+    )
+
+    home_form = sum(
+        state[
+            "recent_points_5"
+        ].get(
+            home,
+            []
+        )
+    )
+
+    away_form = sum(
+        state[
+            "recent_points_5"
+        ].get(
+            away,
+            []
+        )
+    )
+
+    row = {
+        "Home":
+            home,
+
+        "Away":
+            away,
+
+        "Home_Elo":
+            home_elo,
+
+        "Away_Elo":
+            away_elo,
+
+        "EloDiff":
+            home_elo - away_elo,
+
+        "Home_Form5":
+            home_form,
+
+        "Away_Form5":
+            away_form,
+
+        "FormDiff":
+            home_form - away_form,
+
+        "Home_Recent10_GF":
+            state_average(
+                state["recent_gf_10"],
+                home
+            ),
+
+        "Home_Recent10_GA":
+            state_average(
+                state["recent_ga_10"],
+                home
+            ),
+
+        "Away_Recent10_GF":
+            state_average(
+                state["recent_gf_10"],
+                away
+            ),
+
+        "Away_Recent10_GA":
+            state_average(
+                state["recent_ga_10"],
+                away
+            ),
+
+        "Home_Home10_GF":
+            state_average(
+                state["home_gf_10"],
+                home
+            ),
+
+        "Home_Home10_GA":
+            state_average(
+                state["home_ga_10"],
+                home
+            ),
+
+        "Away_Away10_GF":
+            state_average(
+                state["away_gf_10"],
+                away
+            ),
+
+        "Away_Away10_GA":
+            state_average(
+                state["away_ga_10"],
+                away
+            ),
+
+        "Home_AttackRating":
+            home_attack,
+
+        "Home_DefenseRating":
+            home_defense,
+
+        "Away_AttackRating":
+            away_attack,
+
+        "Away_DefenseRating":
+            away_defense,
+
+        "AttackAdvantage":
+            home_attack - away_attack,
+
+        "DefenseAdvantage":
+            away_defense - home_defense
+    }
+
+    return pd.DataFrame([row])
+
+
+# =========================================================
+# Poisson → H/D/A
 # =========================================================
 
 def poisson_probability(
@@ -613,7 +803,7 @@ def poisson_probability(
     )
 
 
-def match_probabilities(
+def calculate_probabilities(
     home_lambda,
     away_lambda
 ):
@@ -621,6 +811,8 @@ def match_probabilities(
     home_win = 0.0
     draw = 0.0
     away_win = 0.0
+
+    score_rows = []
 
     for hg in range(11):
 
@@ -636,16 +828,26 @@ def match_probabilities(
                 away_lambda
             )
 
-            p = ph * pa
+            probability = ph * pa
+
+            score_rows.append(
+                {
+                    "Score":
+                        f"{hg} - {ag}",
+
+                    "Probability":
+                        probability
+                }
+            )
 
             if hg > ag:
-                home_win += p
+                home_win += probability
 
             elif hg == ag:
-                draw += p
+                draw += probability
 
             else:
-                away_win += p
+                away_win += probability
 
     total = (
         home_win
@@ -653,808 +855,463 @@ def match_probabilities(
         + away_win
     )
 
-    return (
-        home_win / total,
-        draw / total,
-        away_win / total
+    probabilities = np.array(
+        [
+            home_win / total,
+            draw / total,
+            away_win / total
+        ]
     )
+
+    return probabilities, score_rows
 
 
 # =========================================================
-# 学習・予測
+# データ状態
 # =========================================================
 
-def run_model(
-    data,
-    train_seasons_excluded,
-    test_season,
-    numeric_features
-):
+st.header("📅 使用しているデータ")
 
-    train = data[
-        ~data["Season"].isin(
-            train_seasons_excluded
-        )
-    ].copy()
+latest_date = matches["Date"].max()
 
-    target = data[
-        data["Season"]
-        == test_season
-    ].copy().reset_index(
-        drop=True
-    )
+st.write(
+    "最新の収録試合日：",
+    latest_date.strftime("%Y-%m-%d")
+)
 
-    features = (
-        numeric_features
-        +
-        CATEGORICAL
-    )
+st.write(
+    "J1収録試合数：",
+    len(matches)
+)
 
-    home_model = make_model(
-        numeric_features
-    )
-
-    away_model = make_model(
-        numeric_features
-    )
-
-    home_model.fit(
-        train[features],
-        train["HG"]
-    )
-
-    away_model.fit(
-        train[features],
-        train["AG"]
-    )
-
-    home_lambda = np.clip(
-        home_model.predict(
-            target[features]
-        ),
-        0.05,
-        5.0
-    )
-
-    away_lambda = np.clip(
-        away_model.predict(
-            target[features]
-        ),
-        0.05,
-        5.0
-    )
-
-    probabilities = []
-
-    for h, a in zip(
-        home_lambda,
-        away_lambda
-    ):
-
-        probabilities.append(
-            match_probabilities(
-                h,
-                a
-            )
-        )
-
-    return (
-        target,
-        home_lambda,
-        away_lambda,
-        np.array(probabilities)
-    )
-
-
-# =========================================================
-# 評価
-# =========================================================
-
-LABELS = np.array(
-    ["H", "D", "A"]
+st.caption(
+    "この日までの終了済み試合を使って、"
+    "その次に行われる試合を予測する状態です。"
 )
 
 
-def evaluate(
-    actual,
-    probabilities
+# =========================================================
+# チーム候補
+# =========================================================
+
+# 最新シーズンに登場したクラブを優先
+latest_season = (
+    matches["Season"]
+    .astype(int)
+    .max()
+)
+
+latest_season_teams = sorted(
+    set(
+        matches.loc[
+            matches["Season"].astype(int)
+            == latest_season,
+            "Home"
+        ]
+    )
+    |
+    set(
+        matches.loc[
+            matches["Season"].astype(int)
+            == latest_season,
+            "Away"
+        ]
+    )
+)
+
+
+# =========================================================
+# 未来試合
+# =========================================================
+
+st.header("🔮 未来試合を予測")
+
+
+col1, col2 = st.columns(2)
+
+
+with col1:
+
+    home_team = st.selectbox(
+        "ホームチーム",
+        latest_season_teams,
+        index=0
+    )
+
+
+away_candidates = [
+    team
+    for team
+    in latest_season_teams
+    if team != home_team
+]
+
+
+with col2:
+
+    away_team = st.selectbox(
+        "アウェイチーム",
+        away_candidates,
+        index=0
+    )
+
+
+future_match = make_future_match(
+    home_team,
+    away_team,
+    current_state
+)
+
+
+# =========================================================
+# 予測
+# =========================================================
+
+pred_home_goals = float(
+    home_model.predict(
+        future_match[
+            ALL_FEATURES
+        ]
+    )[0]
+)
+
+pred_away_goals = float(
+    away_model.predict(
+        future_match[
+            ALL_FEATURES
+        ]
+    )[0]
+)
+
+
+pred_home_goals = float(
+    np.clip(
+        pred_home_goals,
+        0.05,
+        5.0
+    )
+)
+
+pred_away_goals = float(
+    np.clip(
+        pred_away_goals,
+        0.05,
+        5.0
+    )
+)
+
+
+probabilities, score_rows = (
+    calculate_probabilities(
+        pred_home_goals,
+        pred_away_goals
+    )
+)
+
+
+home_probability = probabilities[0]
+draw_probability = probabilities[1]
+away_probability = probabilities[2]
+
+
+# =========================================================
+# 表示
+# =========================================================
+
+st.subheader(
+    f"{home_team} vs {away_team}"
+)
+
+
+g1, g2 = st.columns(2)
+
+
+g1.metric(
+    f"{home_team} 予想得点",
+    f"{pred_home_goals:.2f}"
+)
+
+
+g2.metric(
+    f"{away_team} 予想得点",
+    f"{pred_away_goals:.2f}"
+)
+
+
+st.subheader("🎯 H / D / A 確率")
+
+
+p1, p2, p3 = st.columns(3)
+
+
+p1.metric(
+    "🏠 Home",
+    f"{home_probability:.1%}"
+)
+
+
+p2.metric(
+    "🤝 Draw",
+    f"{draw_probability:.1%}"
+)
+
+
+p3.metric(
+    "✈️ Away",
+    f"{away_probability:.1%}"
+)
+
+
+# =========================================================
+# モデルが最も高く評価した結果
+# =========================================================
+
+labels = np.array(
+    ["H", "D", "A"]
+)
+
+top_result = labels[
+    np.argmax(probabilities)
+]
+
+
+if top_result == "H":
+
+    top_text = (
+        f"{home_team} 勝ち"
+    )
+
+elif top_result == "D":
+
+    top_text = "引き分け"
+
+else:
+
+    top_text = (
+        f"{away_team} 勝ち"
+    )
+
+
+st.info(
+    "📊 最も確率が高い結果："
+    + top_text
+)
+
+
+# =========================================================
+# ランダム抽選
+# =========================================================
+
+st.subheader("🎲 確率に従って1回予想")
+
+
+match_key = (
+    "future_sample_"
+    + home_team
+    + "_"
+    + away_team
+)
+
+
+if st.button(
+    "🎲 予想を抽選"
 ):
 
-    actual = np.array(actual)
+    sampled = np.random.choice(
+        ["H", "D", "A"],
+        p=probabilities
+    )
 
-    prediction = LABELS[
-        np.argmax(
-            probabilities,
-            axis=1
-        )
+    st.session_state[
+        match_key
+    ] = sampled
+
+
+if match_key in st.session_state:
+
+    sampled = st.session_state[
+        match_key
     ]
 
-    correct = int(
-        np.sum(
-            prediction == actual
+    if sampled == "H":
+
+        sampled_text = (
+            f"🏠 {home_team} 勝ち"
         )
-    )
 
-    accuracy = np.mean(
-        prediction == actual
-    )
+    elif sampled == "D":
 
-    actual_index = np.array(
-        [
-            0 if x == "H"
-            else 1 if x == "D"
-            else 2
-            for x in actual
-        ]
-    )
-
-    true_probability = (
-        probabilities[
-            np.arange(
-                len(actual)
-            ),
-            actual_index
-        ]
-    )
-
-    log_loss = -np.mean(
-        np.log(
-            np.clip(
-                true_probability,
-                1e-15,
-                1.0
-            )
-        )
-    )
-
-    onehot = np.zeros(
-        (
-            len(actual),
-            3
-        )
-    )
-
-    onehot[
-        np.arange(
-            len(actual)
-        ),
-        actual_index
-    ] = 1.0
-
-    brier = np.mean(
-        np.sum(
-            (
-                probabilities
-                - onehot
-            ) ** 2,
-            axis=1
-        )
-    )
-
-    draw_mask = (
-        actual == "D"
-    )
-
-    if draw_mask.sum() > 0:
-
-        draw_recall = np.mean(
-            prediction[
-                draw_mask
-            ] == "D"
+        sampled_text = (
+            "🤝 引き分け"
         )
 
     else:
 
-        draw_recall = np.nan
+        sampled_text = (
+            f"✈️ {away_team} 勝ち"
+        )
 
-    return {
-        "Correct": correct,
-        "Accuracy": accuracy,
-        "LogLoss": log_loss,
-        "Brier": brier,
-        "DrawRecall": draw_recall
-    }
+    st.success(
+        "今回の予想："
+        + sampled_text
+    )
 
 
 # =========================================================
-# STEP 1
-# 2024年だけで更新速度を選択
+# スコア確率
 # =========================================================
 
-st.header(
-    "🔧 2024年で更新速度を選択"
+st.subheader("⚽ スコア確率 TOP10")
+
+
+score_table = pd.DataFrame(
+    score_rows
 )
 
 
-LEARNING_RATE_CANDIDATES = [
-    0.02,
-    0.04,
-    0.06,
-    0.08,
-    0.10,
-    0.12,
-    0.16,
-    0.20
-]
-
-
-validation_rows = []
-
-
-with st.spinner(
-    "2024年で更新速度を比較中..."
-):
-
-    for learning_rate in (
-        LEARNING_RATE_CANDIDATES
-    ):
-
-        candidate_data = (
-            build_features(
-                matches,
-                learning_rate
-            )
-        )
-
-        (
-            validation_target,
-            _,
-            _,
-            validation_probs
-        ) = run_model(
-            candidate_data,
-
-            # 2024・2025を学習から除外
-            [
-                "2024",
-                "2025"
-            ],
-
-            "2024",
-
-            G5_NUMERIC
-        )
-
-        metrics = evaluate(
-            validation_target[
-                "Result"
-            ],
-            validation_probs
-        )
-
-        validation_rows.append(
-            {
-                "Learning Rate":
-                    learning_rate,
-
-                "Accuracy":
-                    metrics[
-                        "Accuracy"
-                    ],
-
-                "Log Loss":
-                    metrics[
-                        "LogLoss"
-                    ],
-
-                "Brier":
-                    metrics[
-                        "Brier"
-                    ]
-            }
-        )
-
-
-validation_table = pd.DataFrame(
-    validation_rows
+score_table = (
+    score_table
+    .sort_values(
+        "Probability",
+        ascending=False
+    )
+    .head(10)
+    .copy()
 )
 
 
-# Log Loss最小を採用
-best_index = (
-    validation_table[
-        "Log Loss"
-    ].idxmin()
-)
-
-
-BEST_RATE = float(
-    validation_table.loc[
-        best_index,
-        "Learning Rate"
-    ]
-)
-
-
-display_validation = (
-    validation_table.copy()
-)
-
-
-display_validation[
-    "Accuracy"
-] = (
-    display_validation[
-        "Accuracy"
-    ]
+score_table["確率"] = (
+    score_table["Probability"]
     * 100
 ).round(1)
 
 
-display_validation[
-    "Log Loss"
-] = (
-    display_validation[
-        "Log Loss"
-    ].round(4)
-)
-
-
-display_validation[
-    "Brier"
-] = (
-    display_validation[
-        "Brier"
-    ].round(4)
-)
-
-
-st.metric(
-    "2024年で選ばれた更新速度",
-    f"{BEST_RATE:.2f}"
-)
-
-
 st.dataframe(
-    display_validation,
-    hide_index=True,
-    use_container_width=True
-)
-
-
-# =========================================================
-# STEP 2
-# 2025年を評価
-# =========================================================
-
-st.header(
-    "🏆 2025年380試合"
-)
-
-
-# -------------------------
-# 基準用データ
-# 0.08
-# -------------------------
-
-data_008 = build_features(
-    matches,
-    0.08
-)
-
-
-# -------------------------
-# 選択されたデータ
-# -------------------------
-
-data_best = build_features(
-    matches,
-    BEST_RATE
-)
-
-
-# =========================================================
-# G2
-#
-# Ratingを使わないので0.08データでOK
-# =========================================================
-
-(
-    test_g2,
-    g2_hg,
-    g2_ag,
-    g2_probs
-) = run_model(
-    data_008,
-    ["2025"],
-    "2025",
-    G2_NUMERIC
-)
-
-
-g2_metrics = evaluate(
-    test_g2["Result"],
-    g2_probs
-)
-
-
-# =========================================================
-# G5 固定0.08
-# =========================================================
-
-(
-    test_g5,
-    g5_hg,
-    g5_ag,
-    g5_probs
-) = run_model(
-    data_008,
-    ["2025"],
-    "2025",
-    G5_NUMERIC
-)
-
-
-g5_metrics = evaluate(
-    test_g5["Result"],
-    g5_probs
-)
-
-
-# =========================================================
-# G5.1
-# 2024で選んだ更新速度
-# =========================================================
-
-(
-    test_best,
-    best_hg,
-    best_ag,
-    best_probs
-) = run_model(
-    data_best,
-    ["2025"],
-    "2025",
-    G5_NUMERIC
-)
-
-
-best_metrics = evaluate(
-    test_best["Result"],
-    best_probs
-)
-
-
-# =========================================================
-# 比較
-# =========================================================
-
-comparison = pd.DataFrame(
-    {
-        "モデル": [
-            "G2",
-            "G5 (0.08)",
-            f"G5.1 ({BEST_RATE:.2f})"
-        ],
-
-        "Accuracy": [
-            g2_metrics[
-                "Accuracy"
-            ] * 100,
-
-            g5_metrics[
-                "Accuracy"
-            ] * 100,
-
-            best_metrics[
-                "Accuracy"
-            ] * 100
-        ],
-
-        "Log Loss": [
-            g2_metrics[
-                "LogLoss"
-            ],
-
-            g5_metrics[
-                "LogLoss"
-            ],
-
-            best_metrics[
-                "LogLoss"
-            ]
-        ],
-
-        "Brier": [
-            g2_metrics[
-                "Brier"
-            ],
-
-            g5_metrics[
-                "Brier"
-            ],
-
-            best_metrics[
-                "Brier"
-            ]
-        ],
-
-        "Draw Recall": [
-            g2_metrics[
-                "DrawRecall"
-            ] * 100,
-
-            g5_metrics[
-                "DrawRecall"
-            ] * 100,
-
-            best_metrics[
-                "DrawRecall"
-            ] * 100
-        ],
-
-        "Correct": [
-            g2_metrics[
-                "Correct"
-            ],
-
-            g5_metrics[
-                "Correct"
-            ],
-
-            best_metrics[
-                "Correct"
-            ]
+    score_table[
+        [
+            "Score",
+            "確率"
         ]
-    }
-)
-
-
-comparison[
-    "Accuracy"
-] = (
-    comparison[
-        "Accuracy"
-    ].round(1)
-)
-
-
-comparison[
-    "Log Loss"
-] = (
-    comparison[
-        "Log Loss"
-    ].round(4)
-)
-
-
-comparison[
-    "Brier"
-] = (
-    comparison[
-        "Brier"
-    ].round(4)
-)
-
-
-comparison[
-    "Draw Recall"
-] = (
-    comparison[
-        "Draw Recall"
-    ].round(1)
-)
-
-
-st.subheader(
-    "🆚 G2 vs G5 vs G5.1"
-)
-
-
-st.dataframe(
-    comparison,
+    ],
     hide_index=True,
     use_container_width=True
 )
 
 
 # =========================================================
-# 得点比較
+# 現在のチーム状態
 # =========================================================
 
-st.subheader(
-    "⚽ 平均得点"
-)
+st.subheader("💪 現在のチーム状態")
 
 
-goal_table = pd.DataFrame(
+state_table = pd.DataFrame(
     {
         "項目": [
-            "Home平均得点",
-            "Away平均得点"
+            "Elo",
+            "Attack Rating",
+            "Defense Rating",
+            "直近5試合 勝点"
         ],
 
-        "実際": [
-            test_best[
-                "HG"
-            ].mean(),
+        home_team: [
+            current_state[
+                "elo"
+            ].get(
+                home_team,
+                1500
+            ),
 
-            test_best[
-                "AG"
-            ].mean()
+            current_state[
+                "attack"
+            ].get(
+                home_team,
+                1.0
+            ),
+
+            current_state[
+                "defense"
+            ].get(
+                home_team,
+                1.0
+            ),
+
+            sum(
+                current_state[
+                    "recent_points_5"
+                ].get(
+                    home_team,
+                    []
+                )
+            )
         ],
 
-        "G2": [
-            g2_hg.mean(),
-            g2_ag.mean()
-        ],
+        away_team: [
+            current_state[
+                "elo"
+            ].get(
+                away_team,
+                1500
+            ),
 
-        "G5 0.08": [
-            g5_hg.mean(),
-            g5_ag.mean()
-        ],
+            current_state[
+                "attack"
+            ].get(
+                away_team,
+                1.0
+            ),
 
-        "G5.1": [
-            best_hg.mean(),
-            best_ag.mean()
+            current_state[
+                "defense"
+            ].get(
+                away_team,
+                1.0
+            ),
+
+            sum(
+                current_state[
+                    "recent_points_5"
+                ].get(
+                    away_team,
+                    []
+                )
+            )
         ]
     }
 )
 
 
-for col in [
-    "実際",
-    "G2",
-    "G5 0.08",
-    "G5.1"
-]:
+state_table[
+    home_team
+] = (
+    state_table[
+        home_team
+    ].round(3)
+)
 
-    goal_table[col] = (
-        goal_table[col]
-        .round(3)
-    )
+
+state_table[
+    away_team
+] = (
+    state_table[
+        away_team
+    ].round(3)
+)
 
 
 st.dataframe(
-    goal_table,
+    state_table,
     hide_index=True,
     use_container_width=True
 )
 
 
-# =========================================================
-# H/D/A平均確率
-# =========================================================
-
-st.subheader(
-    "🎯 H / D / A 平均確率"
+st.caption(
+    "Defense Ratingは値が小さいほど守備が強い設計です。"
 )
 
 
-probability_table = pd.DataFrame(
-    {
-        "結果": [
-            "Home",
-            "Draw",
-            "Away"
-        ],
-
-        "実際率": [
-            (
-                test_best[
-                    "Result"
-                ] == "H"
-            ).mean(),
-
-            (
-                test_best[
-                    "Result"
-                ] == "D"
-            ).mean(),
-
-            (
-                test_best[
-                    "Result"
-                ] == "A"
-            ).mean()
-        ],
-
-        "G2": [
-            g2_probs[
-                :,
-                0
-            ].mean(),
-
-            g2_probs[
-                :,
-                1
-            ].mean(),
-
-            g2_probs[
-                :,
-                2
-            ].mean()
-        ],
-
-        "G5 0.08": [
-            g5_probs[
-                :,
-                0
-            ].mean(),
-
-            g5_probs[
-                :,
-                1
-            ].mean(),
-
-            g5_probs[
-                :,
-                2
-            ].mean()
-        ],
-
-        "G5.1": [
-            best_probs[
-                :,
-                0
-            ].mean(),
-
-            best_probs[
-                :,
-                1
-            ].mean(),
-
-            best_probs[
-                :,
-                2
-            ].mean()
-        ]
-    }
-)
-
-
-for col in [
-    "実際率",
-    "G2",
-    "G5 0.08",
-    "G5.1"
-]:
-
-    probability_table[col] = (
-        probability_table[
-            col
-        ]
-        * 100
-    ).round(1)
-
-
-st.dataframe(
-    probability_table,
-    hide_index=True,
-    use_container_width=True
-)
-
-
-# =========================================================
-# 選ばれた更新速度のRatingを見る
-# =========================================================
-
-st.subheader(
-    "💪 G5.1 Rating例"
-)
-
-
-rating_view = test_best[
-    [
-        "Date",
-        "Home",
-        "Away",
-        "Home_AttackRating",
-        "Home_DefenseRating",
-        "Away_AttackRating",
-        "Away_DefenseRating"
-    ]
-].copy()
-
-
-st.dataframe(
-    rating_view,
-    hide_index=True,
-    use_container_width=True
-)
-
-
-st.info(
-    "更新速度は2024年のLog Lossだけで選択しています。"
-    "2025年の結果は更新速度の選択には使用していません。"
+st.warning(
+    "現在はJPN.csvに収録されている最新試合までの状態を使用しています。"
+    "実運用では、新しい試合結果を追加するたびにチーム状態も更新します。"
 )
