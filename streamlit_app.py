@@ -1775,87 +1775,166 @@ def confidence_label(probability):
 
 
 # =========================================================
-# 予測表示
+# 予測表示（スマホ向けカードUI）
 # =========================================================
 
 st.header(
     "🔮 G5.1 自動予測"
 )
 
-
-display = prediction_df.copy()
-
-display["本命の強さ"] = display.apply(
-    lambda row: confidence_label(
-        max(
-            row["H"],
-            row["D"],
-            row["A"],
-        )
-    ),
-    axis=1,
+round_text = (
+    f"第{int(next_round)}節"
+    if next_round is not None
+    else "次の予測対象"
 )
 
-display["Date"] = (
-    display["Date"]
-    .dt.strftime(
-        "%Y-%m-%d"
+summary_c1, summary_c2 = st.columns(2)
+summary_c1.metric(
+    "予測対象",
+    round_text,
+)
+summary_c2.metric(
+    "試合数",
+    f"{len(prediction_df)}試合",
+)
+
+st.caption(
+    "H＝ホーム勝ち / D＝引き分け / A＝アウェイ勝ち。"
+    "本命は3つの中で最も確率が高い結果です。"
+)
+
+for _, row in prediction_df.iterrows():
+
+    top_probability = max(
+        float(row["H"]),
+        float(row["D"]),
+        float(row["A"]),
     )
-)
 
-display["PredHG"] = (
-    display["PredHG"]
-    .round(2)
-)
+    strength = confidence_label(
+        top_probability
+    )
 
-display["PredAG"] = (
-    display["PredAG"]
-    .round(2)
-)
+    top_text = {
+        "H": f"{row['Home']} 勝ち",
+        "D": "引き分け",
+        "A": f"{row['Away']} 勝ち",
+    }[row["Top"]]
 
-for column in [
-    "H",
-    "D",
-    "A",
-]:
+    with st.container(border=True):
 
-    display[column] = (
-        display[column]
-        * 100
-    ).round(1)
+        st.caption(
+            row["Date"].strftime(
+                "%Y-%m-%d"
+            )
+        )
+
+        st.subheader(
+            f"{row['Home']}  vs  {row['Away']}"
+        )
+
+        st.markdown(
+            f"### ⭐ 本命：{top_text}  "
+            f"{top_probability * 100:.1f}%"
+        )
+
+        st.caption(
+            f"本命の強さ：{strength}"
+        )
+
+        p1, p2, p3 = st.columns(3)
+
+        p1.metric(
+            "🏠 H",
+            f"{row['H'] * 100:.1f}%",
+        )
+
+        p2.metric(
+            "🤝 D",
+            f"{row['D'] * 100:.1f}%",
+        )
+
+        p3.metric(
+            "✈️ A",
+            f"{row['A'] * 100:.1f}%",
+        )
+
+        st.progress(
+            float(top_probability),
+            text=(
+                f"本命確率 {top_probability * 100:.1f}%"
+            ),
+        )
+
+        st.caption(
+            "予想得点："
+            f"{row['Home']} {row['PredHG']:.2f} - "
+            f"{row['PredAG']:.2f} {row['Away']}"
+        )
 
 
-display = display.rename(
-    columns={
-        "Date":
-            "日付",
+with st.expander(
+    "📋 予測を表でも見る"
+):
 
-        "PredHG":
-            "予想HG",
+    display = prediction_df.copy()
 
-        "PredAG":
-            "予想AG",
+    display["本命の強さ"] = display.apply(
+        lambda row: confidence_label(
+            max(
+                row["H"],
+                row["D"],
+                row["A"],
+            )
+        ),
+        axis=1,
+    )
 
-        "H":
-            "H %",
+    display["Date"] = (
+        display["Date"]
+        .dt.strftime(
+            "%Y-%m-%d"
+        )
+    )
 
-        "D":
-            "D %",
+    display["PredHG"] = (
+        display["PredHG"]
+        .round(2)
+    )
 
-        "A":
-            "A %",
+    display["PredAG"] = (
+        display["PredAG"]
+        .round(2)
+    )
 
-        "Top":
-            "本命",
-    }
-)
+    for column in [
+        "H",
+        "D",
+        "A",
+    ]:
 
+        display[column] = (
+            display[column]
+            * 100
+        ).round(1)
 
-st.dataframe(
-    display,
-    hide_index=True,
-    use_container_width=True,
-)
+    display = display.rename(
+        columns={
+            "Date": "日付",
+            "PredHG": "予想HG",
+            "PredAG": "予想AG",
+            "H": "H %",
+            "D": "D %",
+            "A": "A %",
+            "Top": "本命",
+        }
+    )
+
+    st.dataframe(
+        display,
+        hide_index=True,
+        use_container_width=True,
+    )
 
 
 # =========================================================
@@ -1866,19 +1945,16 @@ st.header(
     "🎲 全試合を一括抽選"
 )
 
+st.write(
+    "各試合のH/D/A確率に従って、"
+    "今回の予想を1セット生成します。"
+)
 
 if st.button(
     "🎲 今回の予想を生成",
     type="primary",
     use_container_width=True,
 ):
-
-    # -----------------------------------------------------
-    # 今回の重要修正
-    #
-    # listだけで保存するのではなく、
-    # 「試合キー → H/D/A」の辞書として保存する。
-    # -----------------------------------------------------
 
     sample_map = {}
 
@@ -1914,9 +1990,7 @@ if st.button(
             row["Away"],
         )
 
-        sample_map[
-            key
-        ] = sample
+        sample_map[key] = sample
 
     st.session_state[
         "sample_map"
@@ -1930,9 +2004,6 @@ sample_map = (
     )
 )
 
-
-# 現在のカードに対応する抽選が
-# 全部保存されているか確認
 has_current_samples = all(
     key in sample_map
     for key in current_fixture_keys
@@ -1944,6 +2015,10 @@ if has_current_samples:
     final_rows = []
     samples = []
 
+    st.subheader(
+        "🎯 今回生成された予想"
+    )
+
     for _, row in (
         prediction_df.iterrows()
     ):
@@ -1954,102 +2029,89 @@ if has_current_samples:
             row["Away"],
         )
 
-        sample = (
-            sample_map[
-                key
-            ]
-        )
-
-        samples.append(
-            sample
-        )
+        sample = sample_map[key]
+        samples.append(sample)
 
         if sample == "H":
-
             result_text = (
                 f"{row['Home']} 勝ち"
             )
-
         elif sample == "D":
-
-            result_text = (
-                "引き分け"
-            )
-
+            result_text = "引き分け"
         else:
-
             result_text = (
                 f"{row['Away']} 勝ち"
             )
 
+        top_probability = max(
+            float(row["H"]),
+            float(row["D"]),
+            float(row["A"]),
+        )
+
+        strength = confidence_label(
+            top_probability
+        )
+
+        with st.container(border=True):
+
+            st.subheader(
+                f"{row['Home']}  vs  {row['Away']}"
+            )
+
+            st.markdown(
+                f"## 🎲 {result_text}"
+            )
+
+            st.caption(
+                "今回の抽選："
+                f"{sample} ｜ "
+                f"本命：{row['Top']} "
+                f"({top_probability * 100:.1f}%・{strength})"
+            )
+
+            p1, p2, p3 = st.columns(3)
+            p1.metric(
+                "H",
+                f"{row['H'] * 100:.1f}%",
+            )
+            p2.metric(
+                "D",
+                f"{row['D'] * 100:.1f}%",
+            )
+            p3.metric(
+                "A",
+                f"{row['A'] * 100:.1f}%",
+            )
+
         final_rows.append({
-            "No":
-                int(row["No"]),
-
-            "試合":
-                (
-                    f"{row['Home']} "
-                    f"vs "
-                    f"{row['Away']}"
-                ),
-
-            "H %":
-                round(
-                    row["H"]
-                    * 100,
-                    1,
-                ),
-
-            "D %":
-                round(
-                    row["D"]
-                    * 100,
-                    1,
-                ),
-
-            "A %":
-                round(
-                    row["A"]
-                    * 100,
-                    1,
-                ),
-
-            "本命":
-                row["Top"],
-
-            "本命の強さ":
-                confidence_label(
-                    max(
-                        row["H"],
-                        row["D"],
-                        row["A"],
-                    )
-                ),
-
-            "今回の予想":
-                sample,
-
-            "予想内容":
-                result_text,
+            "No": int(row["No"]),
+            "試合": (
+                f"{row['Home']} vs {row['Away']}"
+            ),
+            "H %": round(
+                row["H"] * 100,
+                1,
+            ),
+            "D %": round(
+                row["D"] * 100,
+                1,
+            ),
+            "A %": round(
+                row["A"] * 100,
+                1,
+            ),
+            "本命": row["Top"],
+            "本命の強さ": strength,
+            "今回の予想": sample,
+            "予想内容": result_text,
         })
 
     final_df = pd.DataFrame(
         final_rows
     )
 
-    st.subheader(
-        "🎯 今回生成された予想"
-    )
-
-    st.dataframe(
-        final_df,
-        hide_index=True,
-        use_container_width=True,
-    )
-
-    c1, c2, c3 = (
-        st.columns(3)
-    )
+    c1, c2, c3 = st.columns(3)
 
     c1.metric(
         "🏠 H",
@@ -2065,6 +2127,15 @@ if has_current_samples:
         "✈️ A",
         samples.count("A"),
     )
+
+    with st.expander(
+        "📋 抽選結果を表でも見る"
+    ):
+        st.dataframe(
+            final_df,
+            hide_index=True,
+            use_container_width=True,
+        )
 
     st.success(
         "この抽選結果はCSV保存用にも保持されています。"
