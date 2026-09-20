@@ -1762,8 +1762,8 @@ points_map = (
 # 表示名設定UI
 # =========================================================
 
-with st.expander(
-    "⚙️ チーム表示名を変更する"
+with st.sidebar.expander(
+    "⚙️ チーム表示名"
 ):
 
     st.write(
@@ -1854,116 +1854,30 @@ with st.expander(
 
 
 # =========================================================
-# データ状態
+# データ状態（管理情報はサイドバーへ）
 # =========================================================
 
-st.header(
-    "📡 自動データ更新"
-)
+with st.sidebar.expander("🔧 データ・取得状況"):
+    st.write(f"過去データ：{len(historical)}試合")
+    st.write(f"公式追加結果：{len(current_results)}試合")
+    st.write(f"モデル学習試合：{len(matches)}試合")
 
-c1, c2, c3 = st.columns(3)
+    if official_error:
+        st.warning("Jリーグ公式データの取得に失敗。CSVの次節カードを使用中です。")
+        st.code(official_error)
+    else:
+        st.success("Jリーグ公式データ取得OK")
 
-c1.metric(
-    "過去データ",
-    f"{len(historical)}試合",
-)
+    if unmapped_names:
+        st.error("未登録の公式チーム名：" + "、".join(unmapped_names))
 
-c2.metric(
-    "公式追加結果",
-    f"{len(current_results)}試合",
-)
-
-c3.metric(
-    "モデル学習試合",
-    f"{len(matches)}試合",
-)
-
-
-if official_error:
-
-    st.warning(
-        "Jリーグ公式データの取得に失敗したため、"
-        "CSVの次節カードを使用しています。"
-    )
-
-    st.code(
-        official_error
-    )
-
-else:
-
-    st.success(
-        "Jリーグ公式データを取得できました。"
-    )
-
-
-if unmapped_names:
-
-    st.error(
-        "変換表に登録されていない公式チーム名があります："
-        + "、".join(unmapped_names)
-    )
-
-
-if mapped_not_in_history:
-
-    st.warning(
-        "JPN.csvに同じ名前が見つからないチーム："
-        + "、".join(mapped_not_in_history)
-    )
+    if mapped_not_in_history:
+        st.warning("JPN.csvに見つからないチーム：" + "、".join(mapped_not_in_history))
 
 
 # =========================================================
-# 現在順位
+# 現在順位は予測・抽選の後に表示
 # =========================================================
-
-st.header(
-    "📊 現在のJ1順位"
-)
-
-if len(current_standings) == 0:
-    st.info(
-        "今季の終了済み公式試合がまだないため、順位を計算できません。"
-    )
-else:
-    standings_display = (
-        current_standings.copy()
-    )
-    standings_display["Team"] = (
-        standings_display["Team"]
-        .map(display_team)
-    )
-    standings_display = standings_display.rename(
-        columns={
-            "Rank": "順位",
-            "Team": "クラブ",
-            "P": "試合",
-            "W": "勝",
-            "D": "分",
-            "L": "敗",
-            "GF": "得点",
-            "GA": "失点",
-            "GD": "得失点差",
-            "Pts": "勝点",
-        }
-    )
-
-    st.dataframe(
-        standings_display[
-            [
-                "順位", "クラブ", "試合", "勝点",
-                "勝", "分", "敗",
-                "得点", "失点", "得失点差",
-            ]
-        ],
-        hide_index=True,
-        use_container_width=True,
-    )
-
-    st.caption(
-        "Jリーグ公式サイトから取得した今季の終了済み試合を使い、"
-        "勝点 → 得失点差 → 得点の順でアプリ内計算しています。"
-    )
 
 
 # =========================================================
@@ -1971,7 +1885,7 @@ else:
 # =========================================================
 
 st.header(
-    "🗓️ 自動取得した次節"
+    "⚽ 次節予想"
 )
 
 
@@ -2027,11 +1941,12 @@ next_display = next_display.rename(
     }
 )
 
-st.dataframe(
-    next_display,
-    hide_index=True,
-    use_container_width=True,
-)
+with st.expander("🗓️ 対象カード一覧"):
+    st.dataframe(
+        next_display,
+        hide_index=True,
+        use_container_width=True,
+    )
 
 
 # =========================================================
@@ -2151,6 +2066,46 @@ current_fixture_keys = [
 
 
 # =========================================================
+# 直近5試合（表示用。モデルには影響しない）
+# =========================================================
+
+def recent_form(team, completed, n=5):
+    if completed is None or len(completed) == 0:
+        return [], "-"
+
+    team_games = completed[
+        (completed["Home"] == team) | (completed["Away"] == team)
+    ].sort_values("Date").tail(n)
+
+    results = []
+    points = 0
+
+    for _, game in team_games.iterrows():
+        is_home = game["Home"] == team
+        gf = int(game["HG"] if is_home else game["AG"])
+        ga = int(game["AG"] if is_home else game["HG"])
+
+        if gf > ga:
+            results.append("🟢")
+            points += 3
+        elif gf == ga:
+            results.append("🟡")
+            points += 1
+        else:
+            results.append("🔴")
+
+    if not results:
+        return [], "-"
+
+    return results, points
+
+
+def form_text(team):
+    results, _ = recent_form(team, official_completed, 5)
+    return " ".join(results) if results else "データなし"
+
+
+# =========================================================
 # 本命の強さ
 # =========================================================
 
@@ -2174,8 +2129,8 @@ def confidence_label(probability):
 # 予測表示（スマホ向けカードUI）
 # =========================================================
 
-st.header(
-    "🔮 G5.1 自動予測"
+st.subheader(
+    "🔮 AI予測"
 )
 
 round_text = (
@@ -2252,6 +2207,20 @@ for _, row in prediction_df.iterrows():
 
         st.subheader(
             f"{home_label}  vs  {away_label}"
+        )
+
+        home_form, home_form_pts = recent_form(row["Home"], official_completed, 5)
+        away_form, away_form_pts = recent_form(row["Away"], official_completed, 5)
+
+        st.markdown(
+            "**直近5試合**（古い → 新しい）  "
+            f"\n{home_display}：{' '.join(home_form) if home_form else 'データなし'}  "
+            f"\n{away_display}：{' '.join(away_form) if away_form else 'データなし'}"
+        )
+        st.caption(
+            f"直近5試合の勝点：{home_display} {home_form_pts} ｜ "
+            f"{away_display} {away_form_pts}　　"
+            "🟢勝ち / 🟡引き分け / 🔴負け"
         )
 
         st.markdown(
@@ -2373,7 +2342,7 @@ with st.expander(
 # =========================================================
 
 st.header(
-    "🎲 全試合を一括抽選"
+    "🎲 今回の予想を生成"
 )
 
 st.write(
@@ -2586,11 +2555,43 @@ else:
 
 
 # =========================================================
+# 現在のJ1順位表
+# =========================================================
+
+st.header("📊 現在のJ1順位")
+
+if len(current_standings) == 0:
+    st.info("今季の終了済み公式試合がまだないため、順位を計算できません。")
+else:
+    standings_display = current_standings.copy()
+    standings_display["Team"] = standings_display["Team"].map(display_team)
+    standings_display = standings_display.rename(columns={
+        "Rank": "順位", "Team": "クラブ", "P": "試合",
+        "W": "勝", "D": "分", "L": "敗", "GF": "得点",
+        "GA": "失点", "GD": "得失点差", "Pts": "勝点",
+    })
+
+    with st.expander("順位表を開く"):
+        st.dataframe(
+            standings_display[[
+                "順位", "クラブ", "試合", "勝点", "勝", "分", "敗",
+                "得点", "失点", "得失点差",
+            ]],
+            hide_index=True,
+            use_container_width=True,
+        )
+        st.caption(
+            "Jリーグ公式サイトの今季終了済み試合から、"
+            "勝点 → 得失点差 → 得点の順でアプリ内計算しています。"
+        )
+
+
+# =========================================================
 # 自動取得詳細
 # =========================================================
 
-with st.expander(
-    "🔧 自動取得の詳細を見る"
+with st.sidebar.expander(
+    "📡 自動取得の詳細"
 ):
 
     st.write(
@@ -2616,7 +2617,7 @@ with st.expander(
     )
 
 
-st.info(
+st.sidebar.info(
     "公式サイト側で終了済み試合がまだ「vs」のままの場合、"
     "過去日付なら予測対象から除外します。"
 )
@@ -2628,453 +2629,413 @@ st.info(
 
 st.divider()
 
-st.header(
-    "📒 予測記録・実戦検証"
-)
-
-st.write(
-    "試合前に出した確率予測と抽選結果を保存し、"
-    "試合終了後に公式結果と照合します。"
-)
-
-
-PREDICTION_COLUMNS = [
-    "prediction_time",
-    "date",
-    "home",
-    "away",
-    "pred_hg",
-    "pred_ag",
-    "p_h",
-    "p_d",
-    "p_a",
-    "top",
-    "sampled",
-]
-
-
-# =========================================================
-# 保存済み予測
-# =========================================================
-
-def load_saved_predictions():
-
-    try:
-
-        saved = pd.read_csv(
-            "data/predictions.csv"
-        )
-
-    except Exception:
-
-        saved = pd.DataFrame(
-            columns=PREDICTION_COLUMNS
-        )
-
-    for column in (
-        PREDICTION_COLUMNS
-    ):
-
-        if column not in saved.columns:
-
-            saved[column] = np.nan
-
-    saved = saved[
-        PREDICTION_COLUMNS
-    ].copy()
-
-    saved["date"] = (
-        pd.to_datetime(
-            saved["date"],
-            errors="coerce",
-        )
+# 保存やCSV操作は普段使わないため折りたたみ
+with st.expander("💾 予測の保存・管理"):
+    st.caption(
+        "試合前の予測を保存する時や、GitHubの保存内容を確認する時に使います。"
     )
 
-    saved["prediction_time"] = (
-        pd.to_datetime(
-            saved["prediction_time"],
-            errors="coerce",
-        )
-    )
-
-    for column in [
+    PREDICTION_COLUMNS = [
+        "prediction_time",
+        "date",
+        "home",
+        "away",
         "pred_hg",
         "pred_ag",
         "p_h",
         "p_d",
         "p_a",
-    ]:
+        "top",
+        "sampled",
+    ]
 
-        saved[column] = (
-            pd.to_numeric(
-                saved[column],
+
+    # =========================================================
+    # 保存済み予測
+    # =========================================================
+
+    def load_saved_predictions():
+
+        try:
+
+            saved = pd.read_csv(
+                "data/predictions.csv"
+            )
+
+        except Exception:
+
+            saved = pd.DataFrame(
+                columns=PREDICTION_COLUMNS
+            )
+
+        for column in (
+            PREDICTION_COLUMNS
+        ):
+
+            if column not in saved.columns:
+
+                saved[column] = np.nan
+
+        saved = saved[
+            PREDICTION_COLUMNS
+        ].copy()
+
+        saved["date"] = (
+            pd.to_datetime(
+                saved["date"],
                 errors="coerce",
             )
         )
 
-    saved["home"] = (
-        saved["home"]
-        .astype(str)
-        .str.strip()
-    )
-
-    saved["away"] = (
-        saved["away"]
-        .astype(str)
-        .str.strip()
-    )
-
-    saved["top"] = (
-        saved["top"]
-        .fillna("")
-        .astype(str)
-        .str.strip()
-    )
-
-    # NaNを文字列 "nan" にしない
-    saved["sampled"] = (
-        saved["sampled"]
-        .fillna("")
-        .astype(str)
-        .str.strip()
-    )
-
-    return saved
-
-
-saved_predictions = (
-    load_saved_predictions()
-)
-
-
-# =========================================================
-# 現在の予測をCSV形式にする
-# =========================================================
-
-def make_current_prediction_export():
-
-    rows = []
-
-    # -----------------------------------------------------
-    # session_stateのsample_mapを直接読む
-    # -----------------------------------------------------
-
-    current_sample_map = (
-        st.session_state.get(
-            "sample_map",
-            {},
-        )
-    )
-
-    prediction_time = (
-        pd.Timestamp.now()
-        .strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
-    )
-
-    for _, row in (
-        prediction_df.iterrows()
-    ):
-
-        key = fixture_key(
-            row["Date"],
-            row["Home"],
-            row["Away"],
-        )
-
-        sampled = (
-            current_sample_map.get(
-                key,
-                "",
+        saved["prediction_time"] = (
+            pd.to_datetime(
+                saved["prediction_time"],
+                errors="coerce",
             )
         )
 
-        rows.append({
-            "prediction_time":
-                prediction_time,
+        for column in [
+            "pred_hg",
+            "pred_ag",
+            "p_h",
+            "p_d",
+            "p_a",
+        ]:
 
-            "date":
-                row["Date"].strftime(
-                    "%Y-%m-%d"
-                ),
+            saved[column] = (
+                pd.to_numeric(
+                    saved[column],
+                    errors="coerce",
+                )
+            )
 
-            "home":
-                row["Home"],
+        saved["home"] = (
+            saved["home"]
+            .astype(str)
+            .str.strip()
+        )
 
-            "away":
-                row["Away"],
+        saved["away"] = (
+            saved["away"]
+            .astype(str)
+            .str.strip()
+        )
 
-            "pred_hg":
-                round(
-                    float(
-                        row["PredHG"]
-                    ),
-                    4,
-                ),
+        saved["top"] = (
+            saved["top"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+        )
 
-            "pred_ag":
-                round(
-                    float(
-                        row["PredAG"]
-                    ),
-                    4,
-                ),
+        # NaNを文字列 "nan" にしない
+        saved["sampled"] = (
+            saved["sampled"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+        )
 
-            "p_h":
-                round(
-                    float(
-                        row["H"]
-                    ),
-                    6,
-                ),
+        return saved
 
-            "p_d":
-                round(
-                    float(
-                        row["D"]
-                    ),
-                    6,
-                ),
 
-            "p_a":
-                round(
-                    float(
-                        row["A"]
-                    ),
-                    6,
-                ),
-
-            "top":
-                row["Top"],
-
-            "sampled":
-                sampled,
-        })
-
-    return pd.DataFrame(
-        rows,
-        columns=PREDICTION_COLUMNS,
+    saved_predictions = (
+        load_saved_predictions()
     )
 
 
-current_export = (
-    make_current_prediction_export()
-)
+    # =========================================================
+    # 現在の予測をCSV形式にする
+    # =========================================================
 
+    def make_current_prediction_export():
 
-# =========================================================
-# 抽選結果がCSVへ入るか画面でも確認
-# =========================================================
+        rows = []
 
-st.subheader(
-    "🎲 CSV保存前チェック"
-)
+        # -----------------------------------------------------
+        # session_stateのsample_mapを直接読む
+        # -----------------------------------------------------
 
-
-check_rows = []
-
-for _, row in (
-    current_export.iterrows()
-):
-
-    check_rows.append({
-        "試合":
-            (
-                f"{display_team(row['home'])} "
-                f"vs "
-                f"{display_team(row['away'])}"
-            ),
-
-        "本命":
-            row["top"],
-
-        "保存される抽選":
-            (
-                row["sampled"]
-                if row["sampled"]
-                else "未抽選"
-            ),
-    })
-
-
-st.dataframe(
-    pd.DataFrame(
-        check_rows
-    ),
-    hide_index=True,
-    use_container_width=True,
-)
-
-
-if (
-    len(current_export) > 0
-    and
-    current_export[
-        "sampled"
-    ].isin(
-        [
-            "H",
-            "D",
-            "A",
-        ]
-    ).all()
-):
-
-    st.success(
-        "✅ 全試合の抽選結果がCSVに保存されます。"
-    )
-
-else:
-
-    st.warning(
-        "⚠️ 抽選結果が未保存の試合があります。"
-        "上の「🎲 今回の予想を生成」を押してから"
-        "CSVをダウンロードしてください。"
-    )
-
-
-# =========================================================
-# 過去記録 + 今回
-# =========================================================
-
-def build_merged_export(
-    saved,
-    current,
-):
-
-    saved_for_merge = (
-        saved.copy()
-    )
-
-    current_for_merge = (
-        current.copy()
-    )
-
-    if len(saved_for_merge) > 0:
-
-        saved_for_merge[
-            "date"
-        ] = (
-            saved_for_merge[
-                "date"
-            ]
-            .dt.strftime(
-                "%Y-%m-%d"
+        current_sample_map = (
+            st.session_state.get(
+                "sample_map",
+                {},
             )
         )
 
-        saved_for_merge[
-            "prediction_time"
-        ] = (
-            saved_for_merge[
-                "prediction_time"
-            ]
-            .dt.strftime(
+        prediction_time = (
+            pd.Timestamp.now()
+            .strftime(
                 "%Y-%m-%d %H:%M:%S"
             )
         )
 
-    combined = pd.concat(
-        [
-            saved_for_merge,
-            current_for_merge,
-        ],
-        ignore_index=True,
-    )
+        for _, row in (
+            prediction_df.iterrows()
+        ):
 
-    combined[
-        "_prediction_sort"
-    ] = pd.to_datetime(
-        combined[
-            "prediction_time"
-        ],
-        errors="coerce",
-    )
+            key = fixture_key(
+                row["Date"],
+                row["Home"],
+                row["Away"],
+            )
 
-    combined = (
-        combined
-        .sort_values(
-            "_prediction_sort"
+            sampled = (
+                current_sample_map.get(
+                    key,
+                    "",
+                )
+            )
+
+            rows.append({
+                "prediction_time":
+                    prediction_time,
+
+                "date":
+                    row["Date"].strftime(
+                        "%Y-%m-%d"
+                    ),
+
+                "home":
+                    row["Home"],
+
+                "away":
+                    row["Away"],
+
+                "pred_hg":
+                    round(
+                        float(
+                            row["PredHG"]
+                        ),
+                        4,
+                    ),
+
+                "pred_ag":
+                    round(
+                        float(
+                            row["PredAG"]
+                        ),
+                        4,
+                    ),
+
+                "p_h":
+                    round(
+                        float(
+                            row["H"]
+                        ),
+                        6,
+                    ),
+
+                "p_d":
+                    round(
+                        float(
+                            row["D"]
+                        ),
+                        6,
+                    ),
+
+                "p_a":
+                    round(
+                        float(
+                            row["A"]
+                        ),
+                        6,
+                    ),
+
+                "top":
+                    row["Top"],
+
+                "sampled":
+                    sampled,
+            })
+
+        return pd.DataFrame(
+            rows,
+            columns=PREDICTION_COLUMNS,
         )
-        .drop_duplicates(
-            subset=[
-                "date",
-                "home",
-                "away",
-            ],
-            keep="first",
-        )
-        .drop(
-            columns=[
-                "_prediction_sort"
-            ]
-        )
-        .reset_index(drop=True)
+
+
+    current_export = (
+        make_current_prediction_export()
     )
 
-    return combined[
-        PREDICTION_COLUMNS
-    ]
 
+    # =========================================================
+    # 抽選結果がCSVへ入るか画面でも確認
+    # =========================================================
 
-# =========================================================
-# 重要：
-# 既存行のsampledが空で、
-# 今回の同じ試合にsampledがある場合は補完する
-# =========================================================
-
-def merge_with_sample_fix(
-    saved,
-    current,
-):
-
-    merged = build_merged_export(
-        saved,
-        current,
+    st.subheader(
+        "🎲 CSV保存前チェック"
     )
 
-    # 現在の抽選結果辞書
-    current_samples = {}
+
+    check_rows = []
 
     for _, row in (
-        current.iterrows()
+        current_export.iterrows()
     ):
 
-        key = (
-            str(row["date"]),
-            str(row["home"]),
-            str(row["away"]),
+        check_rows.append({
+            "試合":
+                (
+                    f"{display_team(row['home'])} "
+                    f"vs "
+                    f"{display_team(row['away'])}"
+                ),
+
+            "本命":
+                row["top"],
+
+            "保存される抽選":
+                (
+                    row["sampled"]
+                    if row["sampled"]
+                    else "未抽選"
+                ),
+        })
+
+
+    st.dataframe(
+        pd.DataFrame(
+            check_rows
+        ),
+        hide_index=True,
+        use_container_width=True,
+    )
+
+
+    if (
+        len(current_export) > 0
+        and
+        current_export[
+            "sampled"
+        ].isin(
+            [
+                "H",
+                "D",
+                "A",
+            ]
+        ).all()
+    ):
+
+        st.success(
+            "✅ 全試合の抽選結果がCSVに保存されます。"
         )
 
-        sample = str(
-            row["sampled"]
-        ).strip()
+    else:
 
-        if sample in [
-            "H",
-            "D",
-            "A",
-        ]:
+        st.warning(
+            "⚠️ 抽選結果が未保存の試合があります。"
+            "上の「🎲 今回の予想を生成」を押してから"
+            "CSVをダウンロードしてください。"
+        )
 
-            current_samples[
-                key
-            ] = sample
 
-    # 既存の最初の予測値は変えない。
-    # sampledだけ空欄なら今回の抽選で補完する。
-    for index, row in (
-        merged.iterrows()
+    # =========================================================
+    # 過去記録 + 今回
+    # =========================================================
+
+    def build_merged_export(
+        saved,
+        current,
     ):
 
-        existing_sample = str(
-            row["sampled"]
-        ).strip()
+        saved_for_merge = (
+            saved.copy()
+        )
 
-        if (
-            existing_sample == ""
-            or existing_sample.lower()
-            == "nan"
+        current_for_merge = (
+            current.copy()
+        )
+
+        if len(saved_for_merge) > 0:
+
+            saved_for_merge[
+                "date"
+            ] = (
+                saved_for_merge[
+                    "date"
+                ]
+                .dt.strftime(
+                    "%Y-%m-%d"
+                )
+            )
+
+            saved_for_merge[
+                "prediction_time"
+            ] = (
+                saved_for_merge[
+                    "prediction_time"
+                ]
+                .dt.strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+            )
+
+        combined = pd.concat(
+            [
+                saved_for_merge,
+                current_for_merge,
+            ],
+            ignore_index=True,
+        )
+
+        combined[
+            "_prediction_sort"
+        ] = pd.to_datetime(
+            combined[
+                "prediction_time"
+            ],
+            errors="coerce",
+        )
+
+        combined = (
+            combined
+            .sort_values(
+                "_prediction_sort"
+            )
+            .drop_duplicates(
+                subset=[
+                    "date",
+                    "home",
+                    "away",
+                ],
+                keep="first",
+            )
+            .drop(
+                columns=[
+                    "_prediction_sort"
+                ]
+            )
+            .reset_index(drop=True)
+        )
+
+        return combined[
+            PREDICTION_COLUMNS
+        ]
+
+
+    # =========================================================
+    # 重要：
+    # 既存行のsampledが空で、
+    # 今回の同じ試合にsampledがある場合は補完する
+    # =========================================================
+
+    def merge_with_sample_fix(
+        saved,
+        current,
+    ):
+
+        merged = build_merged_export(
+            saved,
+            current,
+        )
+
+        # 現在の抽選結果辞書
+        current_samples = {}
+
+        for _, row in (
+            current.iterrows()
         ):
 
             key = (
@@ -3083,333 +3044,370 @@ def merge_with_sample_fix(
                 str(row["away"]),
             )
 
-            if key in current_samples:
+            sample = str(
+                row["sampled"]
+            ).strip()
 
-                merged.at[
-                    index,
-                    "sampled"
-                ] = (
-                    current_samples[
-                        key
-                    ]
+            if sample in [
+                "H",
+                "D",
+                "A",
+            ]:
+
+                current_samples[
+                    key
+                ] = sample
+
+        # 既存の最初の予測値は変えない。
+        # sampledだけ空欄なら今回の抽選で補完する。
+        for index, row in (
+            merged.iterrows()
+        ):
+
+            existing_sample = str(
+                row["sampled"]
+            ).strip()
+
+            if (
+                existing_sample == ""
+                or existing_sample.lower()
+                == "nan"
+            ):
+
+                key = (
+                    str(row["date"]),
+                    str(row["home"]),
+                    str(row["away"]),
                 )
 
-    return merged
+                if key in current_samples:
+
+                    merged.at[
+                        index,
+                        "sampled"
+                    ] = (
+                        current_samples[
+                            key
+                        ]
+                    )
+
+        return merged
 
 
-merged_export = (
-    merge_with_sample_fix(
-        saved_predictions,
-        current_export,
-    )
-)
-
-
-# =========================================================
-# CSVダウンロード
-# =========================================================
-
-st.subheader(
-    "💾 今回の予測を記録"
-)
-
-
-csv_bytes = (
-    merged_export
-    .to_csv(
-        index=False
-    )
-    .encode(
-        "utf-8-sig"
-    )
-)
-
-
-st.download_button(
-    label=(
-        "⬇️ predictions.csv をダウンロード"
-    ),
-    data=csv_bytes,
-    file_name="predictions.csv",
-    mime="text/csv",
-    use_container_width=True,
-)
-
-
-st.caption(
-    "ダウンロードした predictions.csv を、"
-    "GitHub の data/predictions.csv と置き換えて"
-    "Commitしてください。"
-)
-
-
-# =========================================================
-# 保存済み予測一覧
-# =========================================================
-
-st.subheader(
-    "📚 GitHubに保存済みの予測"
-)
-
-
-if len(saved_predictions) == 0:
-
-    st.info(
-        "まだGitHubに保存済みの予測はありません。"
-    )
-
-else:
-
-    saved_display = (
-        saved_predictions.copy()
-    )
-
-    saved_display[
-        "prediction_time"
-    ] = (
-        saved_display[
-            "prediction_time"
-        ]
-        .dt.strftime(
-            "%Y-%m-%d %H:%M"
+    merged_export = (
+        merge_with_sample_fix(
+            saved_predictions,
+            current_export,
         )
     )
 
-    saved_display[
-        "date"
-    ] = (
-        saved_display[
-            "date"
-        ]
-        .dt.strftime(
-            "%Y-%m-%d"
+
+    # =========================================================
+    # CSVダウンロード
+    # =========================================================
+
+    st.subheader(
+        "💾 今回の予測を記録"
+    )
+
+
+    csv_bytes = (
+        merged_export
+        .to_csv(
+            index=False
+        )
+        .encode(
+            "utf-8-sig"
         )
     )
 
-    for column in [
-        "p_h",
-        "p_d",
-        "p_a",
-    ]:
 
-        saved_display[
-            column
-        ] = (
-            saved_display[
-                column
-            ]
-            * 100
-        ).round(1)
-
-    saved_display = (
-        saved_display.rename(
-            columns={
-                "prediction_time":
-                    "予測日時",
-
-                "date":
-                    "試合日",
-
-                "home":
-                    "Home",
-
-                "away":
-                    "Away",
-
-                "pred_hg":
-                    "予想HG",
-
-                "pred_ag":
-                    "予想AG",
-
-                "p_h":
-                    "H %",
-
-                "p_d":
-                    "D %",
-
-                "p_a":
-                    "A %",
-
-                "top":
-                    "本命",
-
-                "sampled":
-                    "抽選",
-            }
-        )
-    )
-
-    if "Home" in saved_display.columns:
-        saved_display["Home"] = saved_display["Home"].map(display_team)
-    if "Away" in saved_display.columns:
-        saved_display["Away"] = saved_display["Away"].map(display_team)
-
-    st.dataframe(
-        saved_display,
-        hide_index=True,
+    st.download_button(
+        label=(
+            "⬇️ predictions.csv をダウンロード"
+        ),
+        data=csv_bytes,
+        file_name="predictions.csv",
+        mime="text/csv",
         use_container_width=True,
     )
 
 
-# =========================================================
-# 実際の結果
-# =========================================================
-
-def actual_result(
-    hg,
-    ag,
-):
-
-    if hg > ag:
-
-        return "H"
-
-    elif hg < ag:
-
-        return "A"
-
-    return "D"
+    st.caption(
+        "ダウンロードした predictions.csv を、"
+        "GitHub の data/predictions.csv と置き換えて"
+        "Commitしてください。"
+    )
 
 
-actual_matches = (
-    matches[
-        [
-            "Date",
-            "Home",
-            "Away",
-            "HG",
-            "AG",
-        ]
-    ]
-    .copy()
-)
+    # =========================================================
+    # 保存済み予測一覧
+    # =========================================================
 
-actual_matches[
-    "Actual"
-] = actual_matches.apply(
-    lambda row:
-        actual_result(
-            row["HG"],
-            row["AG"],
-        ),
-    axis=1,
-)
+    st.subheader(
+        "📚 GitHubに保存済みの予測"
+    )
 
 
-# =========================================================
-# 保存予測と実結果を照合
-# =========================================================
+    if len(saved_predictions) == 0:
 
-evaluation = (
-    saved_predictions.copy()
-)
+        st.info(
+            "まだGitHubに保存済みの予測はありません。"
+        )
+
+    else:
+
+        saved_display = (
+            saved_predictions.copy()
+        )
+
+        saved_display[
+            "prediction_time"
+        ] = (
+            saved_display[
+                "prediction_time"
+            ]
+            .dt.strftime(
+                "%Y-%m-%d %H:%M"
+            )
+        )
+
+        saved_display[
+            "date"
+        ] = (
+            saved_display[
+                "date"
+            ]
+            .dt.strftime(
+                "%Y-%m-%d"
+            )
+        )
+
+        for column in [
+            "p_h",
+            "p_d",
+            "p_a",
+        ]:
+
+            saved_display[
+                column
+            ] = (
+                saved_display[
+                    column
+                ]
+                * 100
+            ).round(1)
+
+        saved_display = (
+            saved_display.rename(
+                columns={
+                    "prediction_time":
+                        "予測日時",
+
+                    "date":
+                        "試合日",
+
+                    "home":
+                        "Home",
+
+                    "away":
+                        "Away",
+
+                    "pred_hg":
+                        "予想HG",
+
+                    "pred_ag":
+                        "予想AG",
+
+                    "p_h":
+                        "H %",
+
+                    "p_d":
+                        "D %",
+
+                    "p_a":
+                        "A %",
+
+                    "top":
+                        "本命",
+
+                    "sampled":
+                        "抽選",
+                }
+            )
+        )
+
+        if "Home" in saved_display.columns:
+            saved_display["Home"] = saved_display["Home"].map(display_team)
+        if "Away" in saved_display.columns:
+            saved_display["Away"] = saved_display["Away"].map(display_team)
+
+        st.dataframe(
+            saved_display,
+            hide_index=True,
+            use_container_width=True,
+        )
 
 
-if len(evaluation) > 0:
+    # =========================================================
+    # 実際の結果
+    # =========================================================
 
-    evaluation = (
-        evaluation.merge(
-            actual_matches,
-            left_on=[
-                "date",
-                "home",
-                "away",
-            ],
-            right_on=[
+    def actual_result(
+        hg,
+        ag,
+    ):
+
+        if hg > ag:
+
+            return "H"
+
+        elif hg < ag:
+
+            return "A"
+
+        return "D"
+
+
+    actual_matches = (
+        matches[
+            [
                 "Date",
                 "Home",
                 "Away",
-            ],
-            how="left",
-        )
-    )
-
-    completed_predictions = (
-        evaluation[
-            evaluation[
-                "Actual"
-            ].notna()
+                "HG",
+                "AG",
+            ]
         ]
         .copy()
     )
 
-else:
-
-    completed_predictions = (
-        pd.DataFrame()
+    actual_matches[
+        "Actual"
+    ] = actual_matches.apply(
+        lambda row:
+            actual_result(
+                row["HG"],
+                row["AG"],
+            ),
+        axis=1,
     )
 
 
-# =========================================================
-# Log Loss / Brier
-# =========================================================
+    # =========================================================
+    # 保存予測と実結果を照合
+    # =========================================================
 
-def match_log_loss(row):
+    evaluation = (
+        saved_predictions.copy()
+    )
 
-    epsilon = 1e-15
 
-    if row["Actual"] == "H":
+    if len(evaluation) > 0:
 
-        probability = row["p_h"]
+        evaluation = (
+            evaluation.merge(
+                actual_matches,
+                left_on=[
+                    "date",
+                    "home",
+                    "away",
+                ],
+                right_on=[
+                    "Date",
+                    "Home",
+                    "Away",
+                ],
+                how="left",
+            )
+        )
 
-    elif row["Actual"] == "D":
-
-        probability = row["p_d"]
+        completed_predictions = (
+            evaluation[
+                evaluation[
+                    "Actual"
+                ].notna()
+            ]
+            .copy()
+        )
 
     else:
 
-        probability = row["p_a"]
-
-    probability = float(
-        np.clip(
-            probability,
-            epsilon,
-            1.0 - epsilon,
+        completed_predictions = (
+            pd.DataFrame()
         )
-    )
-
-    return -np.log(
-        probability
-    )
 
 
-def match_brier(row):
+    # =========================================================
+    # Log Loss / Brier
+    # =========================================================
 
-    actual_h = (
-        1.0
-        if row["Actual"] == "H"
-        else 0.0
-    )
+    def match_log_loss(row):
 
-    actual_d = (
-        1.0
-        if row["Actual"] == "D"
-        else 0.0
-    )
+        epsilon = 1e-15
 
-    actual_a = (
-        1.0
-        if row["Actual"] == "A"
-        else 0.0
-    )
+        if row["Actual"] == "H":
 
-    return (
-        (
-            row["p_h"]
-            - actual_h
-        ) ** 2
-        +
-        (
-            row["p_d"]
-            - actual_d
-        ) ** 2
-        +
-        (
-            row["p_a"]
-            - actual_a
-        ) ** 2
-    )
+            probability = row["p_h"]
+
+        elif row["Actual"] == "D":
+
+            probability = row["p_d"]
+
+        else:
+
+            probability = row["p_a"]
+
+        probability = float(
+            np.clip(
+                probability,
+                epsilon,
+                1.0 - epsilon,
+            )
+        )
+
+        return -np.log(
+            probability
+        )
+
+
+    def match_brier(row):
+
+        actual_h = (
+            1.0
+            if row["Actual"] == "H"
+            else 0.0
+        )
+
+        actual_d = (
+            1.0
+            if row["Actual"] == "D"
+            else 0.0
+        )
+
+        actual_a = (
+            1.0
+            if row["Actual"] == "A"
+            else 0.0
+        )
+
+        return (
+            (
+                row["p_h"]
+                - actual_h
+            ) ** 2
+            +
+            (
+                row["p_d"]
+                - actual_d
+            ) ** 2
+            +
+            (
+                row["p_a"]
+                - actual_a
+            ) ** 2
+        )
+
 
 
 # =========================================================
