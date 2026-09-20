@@ -61,6 +61,18 @@ st.markdown(
         border-radius:999px; background:rgba(90,130,220,.14);
         border:1px solid rgba(130,165,255,.25);
     }
+    .match-counter {
+        text-align:center; color:#aebbd3; font-weight:700; letter-spacing:.04em;
+        margin:4px 0 10px 0;
+    }
+    .match-divider {
+        height:1px; margin:10px 0 16px 0;
+        background:linear-gradient(90deg, transparent, rgba(130,165,255,.38), transparent);
+    }
+    div.stButton > button {
+        border-radius:12px; border:1px solid rgba(130,165,255,.28);
+        background:rgba(23,35,61,.72); color:#eef4ff; font-weight:700;
+    }
     h1, h2, h3 { letter-spacing: -.02em; }
     </style>
     """,
@@ -2323,7 +2335,7 @@ st.caption(
     "本命は3つの中で最も確率が高い結果です。"
 )
 
-for _, row in prediction_df.iterrows():
+def render_prediction_card(row):
 
     top_probability = max(
         float(row["H"]),
@@ -2474,6 +2486,46 @@ for _, row in prediction_df.iterrows():
             f"{points_map.get(row['Home'], '-')} - "
             f"{points_map.get(row['Away'], '-')}"
         )
+
+# =========================================================
+# 対戦カードナビゲーション
+# =========================================================
+
+if "match_card_index" not in st.session_state:
+    st.session_state["match_card_index"] = 0
+
+match_count = len(prediction_df)
+if match_count > 0:
+    st.session_state["match_card_index"] = min(
+        max(int(st.session_state.get("match_card_index", 0)), 0),
+        match_count - 1,
+    )
+
+    nav_left, nav_center, nav_right = st.columns([1, 1.35, 1])
+    with nav_left:
+        if st.button("← 前の試合", use_container_width=True, disabled=match_count <= 1):
+            st.session_state["match_card_index"] = (
+                st.session_state["match_card_index"] - 1
+            ) % match_count
+    with nav_center:
+        st.markdown(
+            f'<div class="match-counter">MATCH {st.session_state["match_card_index"] + 1} / {match_count}</div>',
+            unsafe_allow_html=True,
+        )
+    with nav_right:
+        if st.button("次の試合 →", use_container_width=True, disabled=match_count <= 1):
+            st.session_state["match_card_index"] = (
+                st.session_state["match_card_index"] + 1
+            ) % match_count
+
+    selected_row = prediction_df.iloc[st.session_state["match_card_index"]]
+    render_prediction_card(selected_row)
+
+    st.caption("← → ボタンで対戦カードを1試合ずつ切り替えられます。")
+
+    with st.expander("🗂️ 全対戦カードを続けて見る"):
+        for _, list_row in prediction_df.iterrows():
+            render_prediction_card(list_row)
 
 
 with st.expander(
