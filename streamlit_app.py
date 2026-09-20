@@ -1755,6 +1755,26 @@ current_fixture_keys = [
 
 
 # =========================================================
+# 本命の強さ
+# =========================================================
+
+def confidence_label(probability):
+
+    percent = float(probability) * 100
+
+    if percent >= 60:
+        return "かなり優勢"
+
+    elif percent >= 50:
+        return "優勢"
+
+    elif percent >= 43:
+        return "やや優勢"
+
+    return "ほぼ互角"
+
+
+# =========================================================
 # 予測表示
 # =========================================================
 
@@ -1764,6 +1784,17 @@ st.header(
 
 
 display = prediction_df.copy()
+
+display["本命の強さ"] = display.apply(
+    lambda row: confidence_label(
+        max(
+            row["H"],
+            row["D"],
+            row["A"],
+        )
+    ),
+    axis=1,
+)
 
 display["Date"] = (
     display["Date"]
@@ -1985,6 +2016,15 @@ if has_current_samples:
 
             "本命":
                 row["Top"],
+
+            "本命の強さ":
+                confidence_label(
+                    max(
+                        row["H"],
+                        row["D"],
+                        row["A"],
+                    )
+                ),
 
             "今回の予想":
                 sample,
