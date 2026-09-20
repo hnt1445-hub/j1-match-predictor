@@ -517,7 +517,7 @@ def display_team(team):
 
 if len(official_games) > 0:
 
-   matches = (
+    official_completed = (
         official_games[
             official_games["HG"].notna()
             &
@@ -532,28 +532,28 @@ if len(official_games) > 0:
 
 else:
 
-    matches = (
+    official_completed = (
         pd.DataFrame()
     )
 
 
-if len(matches) > 0:
+if len(official_completed) > 0:
 
     current_results = pd.DataFrame({
         "Date":
-            matches["Date"],
+            official_completed["Date"],
 
         "Home":
-            matches["Home"],
+            official_completed["Home"],
 
         "Away":
-            matches["Away"],
+            official_completed["Away"],
 
         "HG":
-            matches["HG"],
+            official_completed["HG"],
 
         "AG":
-            matches["AG"],
+            official_completed["AG"],
 
         "Source":
             "J.League Official",
@@ -1731,7 +1731,7 @@ def build_current_standings(completed):
 
 current_standings = (
     build_current_standings(
-        matches
+        official_completed
     )
 )
 
@@ -2101,7 +2101,7 @@ def recent_form(team, completed, n=5):
 
 
 def form_text(team):
-    results, _ = recent_form(team, matches, 5)
+    results, _ = recent_form(team, official_completed, 5)
     return " ".join(results) if results else "データなし"
 
 
@@ -2266,8 +2266,8 @@ for _, row in prediction_df.iterrows():
             f"{home_label}  vs  {away_label}"
         )
 
-        home_form, home_form_pts = recent_form(row["Home"], matches, 5)
-        away_form, away_form_pts = recent_form(row["Away"],matches, 5)
+        home_form, home_form_pts = recent_form(row["Home"], official_completed, 5)
+        away_form, away_form_pts = recent_form(row["Away"], official_completed, 5)
 
         st.markdown(
             "**直近5試合**（古い → 新しい）  "
