@@ -40,10 +40,47 @@ st.markdown(
     }
     [data-testid="stHeader"] { background: rgba(7,11,19,.72); }
     [data-testid="stMetric"] {
-        background: rgba(255,255,255,.045);
-        border: 1px solid rgba(255,255,255,.08);
+        background: rgba(255,255,255,.065);
+        border: 1px solid rgba(170,195,255,.18);
         border-radius: 14px;
         padding: 10px 12px;
+    }
+    /* Streamlit の metric はテーマ色を別レイヤーで持つため、
+       ダーク背景でもラベル・数値・補助値を常に高コントラストにする */
+    [data-testid="stMetricLabel"],
+    [data-testid="stMetricLabel"] p,
+    [data-testid="stMetricLabel"] div {
+        color: #c9d5ea !important;
+        opacity: 1 !important;
+        font-weight: 700 !important;
+    }
+    [data-testid="stMetricValue"],
+    [data-testid="stMetricValue"] div,
+    [data-testid="stMetricValue"] p {
+        color: #f7faff !important;
+        opacity: 1 !important;
+        font-weight: 800 !important;
+        text-shadow: 0 1px 10px rgba(120,160,255,.10);
+    }
+    [data-testid="stMetricDelta"],
+    [data-testid="stMetricDelta"] div,
+    [data-testid="stMetricDelta"] p {
+        opacity: 1 !important;
+    }
+    /* 通常テキストやキャプションも暗すぎないように統一 */
+    [data-testid="stMarkdownContainer"] p {
+        color: #e6edf8;
+    }
+    [data-testid="stCaptionContainer"],
+    [data-testid="stCaptionContainer"] p {
+        color: #aebbd3 !important;
+        opacity: 1 !important;
+    }
+    /* progress 内の文字も読みやすくする */
+    [data-testid="stProgress"] p {
+        color: #dce7f8 !important;
+        opacity: 1 !important;
+        font-weight: 700 !important;
     }
     div[data-testid="stVerticalBlockBorderWrapper"] {
         background: linear-gradient(145deg, rgba(25,39,67,.94), rgba(12,20,36,.96));
