@@ -23,6 +23,50 @@ st.set_page_config(
     layout="wide",
 )
 
+# =========================================================
+# ダーク・スポーツUI
+# =========================================================
+
+st.markdown(
+    """
+    <style>
+    .stApp {
+        background: radial-gradient(circle at top, #17233d 0%, #0b1220 42%, #070b13 100%);
+        color: #eef4ff;
+    }
+    [data-testid="stSidebar"] {
+        background: #0b1324;
+        border-right: 1px solid rgba(255,255,255,.08);
+    }
+    [data-testid="stHeader"] { background: rgba(7,11,19,.72); }
+    [data-testid="stMetric"] {
+        background: rgba(255,255,255,.045);
+        border: 1px solid rgba(255,255,255,.08);
+        border-radius: 14px;
+        padding: 10px 12px;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        background: linear-gradient(145deg, rgba(25,39,67,.94), rgba(12,20,36,.96));
+        border: 1px solid rgba(120,160,255,.22) !important;
+        border-radius: 18px !important;
+        box-shadow: 0 10px 30px rgba(0,0,0,.22);
+    }
+    .favorite-banner {
+        padding: 8px 12px; margin: 4px 0 10px 0; border-radius: 12px;
+        background: linear-gradient(90deg, rgba(255,196,46,.24), rgba(255,196,46,.06));
+        border: 1px solid rgba(255,196,46,.65); color: #ffe39a; font-weight: 700;
+    }
+    .prob-chip {
+        display:inline-block; padding:6px 10px; margin:3px 4px 3px 0;
+        border-radius:999px; background:rgba(90,130,220,.14);
+        border:1px solid rgba(130,165,255,.25);
+    }
+    h1, h2, h3 { letter-spacing: -.02em; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.title("⚽ J1 Matchday Predictor")
 
 st.write(
@@ -2183,6 +2227,74 @@ def confidence_label(probability):
 
 
 # =========================================================
+# お気に入り設定・表示用補正
+# =========================================================
+
+if "favorite_team" not in st.session_state:
+    st.session_state["favorite_team"] = "なし"
+if "favorite_boost" not in st.session_state:
+    st.session_state["favorite_boost"] = 0.0
+if "favorite_sampling" not in st.session_state:
+    st.session_state["favorite_sampling"] = True
+
+favorite_options = ["なし"] + sorted(
+    current_season_teams if current_season_teams else all_internal_teams,
+    key=lambda team: display_team(team),
+)
+
+with st.sidebar.expander("⭐ お気に入り", expanded=True):
+    current_favorite = st.session_state.get("favorite_team", "なし")
+    if current_favorite not in favorite_options:
+        current_favorite = "なし"
+    favorite_team = st.selectbox(
+        "お気に入りチーム",
+        favorite_options,
+        index=favorite_options.index(current_favorite),
+        format_func=lambda team: "なし" if team == "なし" else display_team(team),
+        key="favorite_team_select",
+    )
+    favorite_boost = st.slider(
+        "お気に入り補正（ポイント）",
+        min_value=0.0, max_value=15.0,
+        value=float(st.session_state.get("favorite_boost", 0.0)),
+        step=0.5,
+        help="お気に入り側の勝率表示に加える補正です。G5.1本体は変更しません。",
+    )
+    favorite_sampling = st.checkbox(
+        "抽選にもお気に入り補正を使う",
+        value=bool(st.session_state.get("favorite_sampling", True)),
+    )
+    st.session_state["favorite_team"] = favorite_team
+    st.session_state["favorite_boost"] = favorite_boost
+    st.session_state["favorite_sampling"] = favorite_sampling
+    st.caption("補正はユーザー向け表示・任意の抽選だけに使います。実戦成績は補正前G5.1で評価します。")
+
+def favorite_adjusted_probabilities(row):
+    probs = np.array([float(row["H"]), float(row["D"]), float(row["A"])], dtype=float)
+    fav = st.session_state.get("favorite_team", "なし")
+    boost = float(st.session_state.get("favorite_boost", 0.0)) / 100.0
+    if fav == "なし" or boost <= 0:
+        return probs
+    if row["Home"] == fav:
+        idx = 0
+    elif row["Away"] == fav:
+        idx = 2
+    else:
+        return probs
+    target = min(probs[idx] + boost, 0.99)
+    other_idx = [i for i in range(3) if i != idx]
+    other_sum = probs[other_idx].sum()
+    remaining = 1.0 - target
+    if other_sum > 0:
+        probs[other_idx] = probs[other_idx] / other_sum * remaining
+    probs[idx] = target
+    return probs / probs.sum()
+
+def is_favorite_match(row):
+    fav = st.session_state.get("favorite_team", "なし")
+    return fav != "なし" and (row["Home"] == fav or row["Away"] == fav)
+
+# =========================================================
 # 予測表示（スマホ向けカードUI）
 # =========================================================
 
@@ -2256,6 +2368,12 @@ for _, row in prediction_df.iterrows():
 
     with st.container(border=True):
 
+        if is_favorite_match(row):
+            st.markdown(
+                f'<div class="favorite-banner">⭐ お気に入り：{display_team(st.session_state.get("favorite_team"))}</div>',
+                unsafe_allow_html=True,
+            )
+
         st.caption(
             row["Date"].strftime(
                 "%Y-%m-%d"
@@ -2313,6 +2431,16 @@ for _, row in prediction_df.iterrows():
         st.caption(
             f"本命の強さ：{strength}"
         )
+
+        adjusted_probs = favorite_adjusted_probabilities(row)
+        if is_favorite_match(row) and float(st.session_state.get("favorite_boost", 0.0)) > 0:
+            st.markdown(
+                "**⭐ お気に入り補正後（ユーザー予想）**  "
+                f"H {adjusted_probs[0]*100:.1f}% ｜ "
+                f"D {adjusted_probs[1]*100:.1f}% ｜ "
+                f"A {adjusted_probs[2]*100:.1f}%"
+            )
+            st.caption(f"補正値：+{st.session_state.get('favorite_boost', 0.0):.1f}ポイント。下のH/D/Aは補正前のG5.1です。")
 
         p1, p2, p3 = st.columns(3)
 
@@ -2432,6 +2560,15 @@ st.write(
     "今回の予想を1セット生成します。"
 )
 
+if st.session_state.get("favorite_team", "なし") != "なし":
+    if st.session_state.get("favorite_sampling", True) and st.session_state.get("favorite_boost", 0.0) > 0:
+        st.info(
+            f"⭐ 抽選には {display_team(st.session_state['favorite_team'])} の "
+            f"+{st.session_state['favorite_boost']:.1f}ポイント補正を使用します。"
+        )
+    else:
+        st.caption("⭐ お気に入りは登録済みですが、抽選はG5.1の元確率を使います。")
+
 if st.button(
     "🎲 今回の予想を生成",
     type="primary",
@@ -2444,16 +2581,16 @@ if st.button(
         prediction_df.iterrows()
     ):
 
-        probabilities = np.array([
-            float(row["H"]),
-            float(row["D"]),
-            float(row["A"]),
-        ])
+        if st.session_state.get("favorite_sampling", True):
+            probabilities = favorite_adjusted_probabilities(row)
+        else:
+            probabilities = np.array([
+                float(row["H"]),
+                float(row["D"]),
+                float(row["A"]),
+            ])
 
-        probabilities = (
-            probabilities
-            / probabilities.sum()
-        )
+        probabilities = probabilities / probabilities.sum()
 
         sample = str(
             np.random.choice(
